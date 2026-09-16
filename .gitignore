@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# CMake / C++ build trees, and editor/tooling caches
+build*/
+.cache/
+compile_commands.json
+.DS_Store
+
+# Converted weights and reference dumps are large and regenerated
+# (docs/TESTING.md). testdata/vectors and testdata/audio stay tracked.
+testdata/weights/
+testdata/refs/
+
+# Claude Code
+.claude/

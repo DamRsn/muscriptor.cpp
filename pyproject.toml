@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "muscriptor-cpp"
+version = "0.1.0"
+description = "PyTorch -> ggml port of MuScriptor: reference extraction, GGUF conversion, parity tooling"
+requires-python = ">=3.11,<3.14"
+license = "MIT"
+license-files = ["LICENSE"]
+
+# Enough to read and write a GGUF. Everything else -- converting a checkpoint,
+# dumping PyTorch references -- is an opt-in dependency group.
+dependencies = [
+    # llama.cpp's GGUF writer/reader. Used for both the converted weights and
+    # the reference-tensor dumps, so the C++ side needs no extra parser.
+    "gguf>=0.10",
+    "numpy>=1.24",
+]
+
+[dependency-groups]
+convert = ["safetensors>=0.4", "huggingface_hub>=0.13"]
+# The reference implementation, pinned by commit so the numbers we dump come
+# from one known tree.
+reference = ["muscriptor", "torch>=2.6", "soundfile>=0.14"]
+
+[project.scripts]
+msl-dump-refs = "msl.dump_refs:main"
+msl-convert = "msl.convert_gguf:main"
+msl-fetch = "msl.fetch:main"
+msl-audio-fixture = "msl.audio_fixture:main"
+msl-tables = "msl.tables:main"
+msl-note-vectors = "msl.note_vectors:main"
+msl-bench-torch = "msl.bench_torch:main"
+msl-parity-report = "msl.parity_report:main"
+msl-bench-matrix = "msl.bench_matrix:main"
+
+[tool.uv]
+# Nothing beyond the base dependencies unless a group is asked for.
+default-groups = []
+# Everywhere but Intel macs, where the reference implementation pins torch<2.3
+# (no wheels past 2.2.2) and the `reference` group wants torch>=2.6.
+environments = ["sys_platform != 'darwin' or platform_machine == 'arm64'"]
+
+[tool.uv.sources]
+muscriptor = { git = "https://github.com/muscriptor/muscriptor.git", rev = "7f213afecf23bd6a1b8672aa223690ee9807cefb" }
+
+[tool.hatch.build.targets.wheel]
+packages = ["msl"]
