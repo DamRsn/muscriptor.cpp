@@ -107,6 +107,44 @@ struct Args {
     int repeats = 1;
     bool use_gpu = true;
     bool transcribe = false;
+    bool load_profile = false;
+};
+
+/** A `should_cancel` that never cancels, and records the gaps between polls. */
+class PollTimer
+{
+public:
+    void start() { mLast = Clock::now(); }
+
+    bool poll()
+    {
+        const Clock::time_point now = Clock::now();
+        const double gap = std::chrono::duration<double, std::milli>(now - mLast).count();
+
+        if (mPolls == 0) {
+            mFirstPollMs = gap;
+        }
+
+        else {
+            mMaxGapMs = std::max(mMaxGapMs, gap);
+        }
+
+        mLast = now;
+        ++mPolls;
+        return false;
+    }
+
+    void report() const
+    {
+        std::printf(
+            "polls     %8zu   first after %.1f ms, then at most %.2f ms apart\n", mPolls, mFirstPollMs, mMaxGapMs);
+    }
+
+private:
+    Clock::time_point mLast;
+    std::size_t mPolls = 0;
+    double mFirstPollMs = 0.0;
+    double mMaxGapMs = 0.0;
 };
 
 /** @return Percentile `inQ` of an already-sorted `inSorted`. */
@@ -123,7 +161,7 @@ double percentile(const std::vector<double>& inSorted, double inQ)
 
 constexpr const char* USAGE = "usage: %s [--size small|medium|large] [--device cpu|gpu] [--weight-dtype f16|f32]\n"
                               "       [--weights f.gguf] [--audio f.wav] [--steps N] [--threads N]\n"
-                              "       [--chunk K] [--repeats N] [--transcribe]\n";
+                              "       [--chunk K] [--repeats N] [--transcribe] [--load-profile]\n";
 
 /**
  * Parse the command line.
@@ -217,6 +255,10 @@ std::optional<Args> parseArgs(int inArgc, char** inArgv)
             args.transcribe = true;
         }
 
+        else if (flag == "--load-profile") {
+            args.load_profile = true;
+        }
+
         else {
             std::fprintf(stderr, USAGE, inArgv[0]);
             return std::nullopt;
@@ -229,6 +271,10 @@ std::optional<Args> parseArgs(int inArgc, char** inArgv)
 
     if (args.repeats < 1) {
         throw std::runtime_error("--repeats must be at least 1");
+    }
+
+    if (args.transcribe && args.load_profile) {
+        throw std::runtime_error("--transcribe and --load-profile are separate modes");
     }
 
     if (args.weights.empty()) {
@@ -250,6 +296,52 @@ int main(int argc, char** argv)
         }
 
         const Args& args = *parsed;
+
+        // Load mode: where the load's time goes, measured through the public
+        // callbacks: backend initialisation up to the first poll, the weight
+        // upload between the first and last progress report, and setup after.
+        if (args.load_profile) {
+            PollTimer timer;
+            std::optional<double> upload_began_ms;
+            double upload_ended_ms = 0.0;
+
+            msl::LoadOptions load_options;
+            load_options.use_gpu = args.use_gpu;
+            load_options.should_cancel = [&timer] { return timer.poll(); };
+
+            const Clock::time_point began = Clock::now();
+
+            load_options.on_progress = [&](float inProgress) {
+                const double now_ms = millisSince(began);
+
+                if (!upload_began_ms.has_value()) {
+                    upload_began_ms = now_ms;
+                }
+
+                if (inProgress >= 1.0f) {
+                    upload_ended_ms = now_ms;
+                }
+            };
+
+            timer.start();
+            const std::expected<msl::Transcriber, msl::Error> transcriber =
+                msl::Transcriber::load(args.weights, load_options);
+            const double total_ms = millisSince(began);
+
+            if (!transcriber.has_value()) {
+                throw std::runtime_error(msl::format("load failed: {}", msl::describe(transcriber.error())));
+            }
+
+            std::printf("weights   %s\n", args.weights.filename().string().c_str());
+            std::printf("backend   %8s\n", transcriber->backendName());
+            std::printf("init      %8.1f ms   (to the first progress report)\n", upload_began_ms.value_or(0.0));
+            std::printf("upload    %8.1f ms\n", upload_ended_ms - upload_began_ms.value_or(0.0));
+            std::printf("setup     %8.1f ms\n", total_ms - upload_ended_ms);
+            std::printf("load      %8.1f ms\n", total_ms);
+            timer.report();
+            return 0;
+        }
+
         const std::vector<float> signal = readFloatWav(args.audio);
 
         // Whole-signal mode: the number a caller actually feels, rather than
@@ -275,10 +367,14 @@ int main(int argc, char** argv)
 
             const double loaded_ms = millisSince(began);
 
+            PollTimer timer;
+
             msl::TranscribeOptions transcribe_options;
             transcribe_options.n_threads = args.threads;
+            transcribe_options.should_cancel = [&timer] { return timer.poll(); };
 
             began = Clock::now();
+            timer.start();
             const std::expected<std::vector<msl::Note>, msl::Error> notes =
                 transcriber->transcribe(signal, transcribe_options);
             const double elapsed_ms = millisSince(began);
@@ -296,6 +392,7 @@ int main(int argc, char** argv)
             std::printf("transcribe %7.2f s\n", elapsed_ms / 1000.0);
             std::printf("speed     %8.2fx real time\n", audio_s / (elapsed_ms / 1000.0));
             std::printf("notes     %8zu\n", notes->size());
+            timer.report();
             return 0;
         }
 

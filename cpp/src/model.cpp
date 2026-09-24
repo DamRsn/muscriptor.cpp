@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <span>
 #include <string>
 #include <thread>
@@ -81,6 +82,14 @@ namespace
 #endif
 
         return logical;
+    }
+
+    /** Throws `Error::Cancelled` if `inShouldCancel` is set and says so. */
+    void throwIfCancelled(const std::function<bool()>& inShouldCancel)
+    {
+        if (inShouldCancel && inShouldCancel()) {
+            throw Exception(Error::Cancelled, "cancelled");
+        }
     }
 
 #if defined(MUSCRIPTOR_HAS_VULKAN)
@@ -345,6 +354,11 @@ struct Model::Impl {
     ggml_tensor* cond_proj_w = nullptr;
     ggml_tensor* cond_proj_b = nullptr;
 
+    // Polled by `generate` and, through `abortRequested`, by the CPU backend.
+    // Only the CPU backend gets the abort callback: ggml-metal checks its own
+    // only while a GPU capture is running, and ggml-vulkan has none.
+    std::function<bool()> should_cancel;
+
     // Graph metadata scratch, allocated once at load and reused by every
     // evaluation. See GraphScratch.
     std::vector<std::uint8_t> graph_buffer;
@@ -455,6 +469,13 @@ struct Model::Impl {
         }
     }
 
+    /** ggml abort callback: `inData` is the `Impl`. */
+    static bool abortRequested(void* inData)
+    {
+        const Impl& impl = *static_cast<const Impl*>(inData);
+        return impl.should_cancel && impl.should_cancel();
+    }
+
     void execute(ggml_cgraph* inGf, ggml_backend_t inBackend)
     {
         last_graph_nodes = ggml_graph_n_nodes(inGf);
@@ -463,7 +484,13 @@ struct Model::Impl {
             ggml_backend_cpu_set_n_threads(inBackend, opts.n_threads);
         }
 
-        if (ggml_backend_graph_compute(inBackend, inGf) != GGML_STATUS_SUCCESS) {
+        const ggml_status status = ggml_backend_graph_compute(inBackend, inGf);
+
+        if (status == GGML_STATUS_ABORTED) {
+            throw Exception(Error::Cancelled, "graph computation cancelled");
+        }
+
+        if (status != GGML_STATUS_SUCCESS) {
             throw Exception(Error::Internal, "ggml graph computation failed");
         }
     }
@@ -560,15 +587,29 @@ Model Model::load(const std::filesystem::path& inGgufPath, Options inOptions)
         inOptions.n_threads = defaultThreadCount();
     }
 
+    // The load-time callbacks are not kept: nothing may call them once `load`
+    // has returned.
     impl.opts = inOptions;
+    impl.opts.should_cancel = {};
+    impl.opts.on_progress = {};
 
+    // Not interruptible: on a GPU this can include compiling shaders.
     impl.backend = initBackend(inOptions.use_gpu, &impl.backend_name);
 
     if (impl.backend == nullptr) {
         throw Exception(Error::OutOfMemory, "failed to initialise a ggml backend");
     }
 
-    impl.file = std::make_unique<GgufFile>(inGgufPath, impl.backend);
+    throwIfCancelled(inOptions.should_cancel);
+
+    impl.file = std::make_unique<GgufFile>(
+        inGgufPath, impl.backend, [&inOptions](std::size_t inBytesDone, std::size_t inBytesTotal) {
+            throwIfCancelled(inOptions.should_cancel);
+
+            if (inOptions.on_progress) {
+                inOptions.on_progress(inBytesTotal > 0 ? static_cast<float>(inBytesDone) / inBytesTotal : 1.0f);
+            }
+        });
 
     const GgufFile& f = *impl.file;
 
@@ -721,6 +762,11 @@ Model Model::load(const std::filesystem::path& inGgufPath, Options inOptions)
     impl.pos_table = buildPositionTable(inOptions.n_ctx, hp.dim, hp.max_period);
     impl.stft = std::make_unique<Stft>(hp.n_fft, hp.hop_length, tensorToFloat(w.stft_window));
     model.reset();
+
+    // `cond_backend` is always a CPU backend, and is `backend` itself on the CPU.
+    ggml_backend_cpu_set_abort_callback(impl.cond_backend, &Impl::abortRequested, &impl);
+
+    throwIfCancelled(inOptions.should_cancel);
     return model;
 }
 
@@ -1236,6 +1282,7 @@ std::vector<std::int32_t> Model::generate(std::span<const float> inConditioning,
         // Skip the last forward pass once the budget is spent: nothing reads its
         // logits, and it would take one more KV position.
         if (step + 1 < inMaxTokens) {
+            throwIfCancelled(mImpl->should_cancel);
             logits = decode(next);
         }
     }
@@ -1287,6 +1334,11 @@ void Model::setNumThreads(int inNThreads)
 int Model::numThreads() const
 {
     return mImpl->opts.n_threads;
+}
+
+void Model::setShouldCancel(std::function<bool()> inShouldCancel)
+{
+    mImpl->should_cancel = std::move(inShouldCancel);
 }
 
 } // namespace msl

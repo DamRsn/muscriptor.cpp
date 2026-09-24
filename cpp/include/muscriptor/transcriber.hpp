@@ -14,6 +14,13 @@
 namespace msl
 {
 
+/**
+ * Polled while `load` or `transcribe` runs, always on the thread that called
+ * it; return true to stop, and the call returns `Error::Cancelled`. It is
+ * called often, so keep it to something like an atomic load.
+ */
+using CancelPredicate = std::function<bool()>;
+
 struct TranscribeOptions {
     /**
      * Instruments to transcribe. Empty selects the unconditional path.
@@ -35,6 +42,13 @@ struct TranscribeOptions {
      * backend. Inside a DAW, cap it to leave cores for the host's audio threads.
      */
     int n_threads = 0;
+
+    /**
+     * Polled before each chunk, before each decode step, and on the CPU backend
+     * at every node of a graph. Empty: never cancelled. See docs/API.md for the
+     * longest stretch between two polls on each backend.
+     */
+    CancelPredicate should_cancel;
 };
 
 /** Options fixed at load: they decide where the weights and KV cache live. */
@@ -45,6 +59,21 @@ struct LoadOptions {
      * are not bit-identical.
      */
     bool use_gpu = true;
+
+    /**
+     * Polled after backend initialisation, after each weight tensor, and once
+     * more before `load` returns. Empty: never cancelled. Backend
+     * initialisation itself cannot be interrupted; see docs/API.md.
+     */
+    CancelPredicate should_cancel;
+
+    /**
+     * Fraction of the weight bytes uploaded, 0 to 1, non-decreasing, on the
+     * loading thread. The first call, with 0, comes after backend
+     * initialisation; the last, with 1, is followed by a short setup before
+     * `load` returns.
+     */
+    std::function<void(float inProgress)> on_progress;
 };
 
 /**
@@ -84,7 +113,9 @@ struct TranscriptionUpdate {
 
 /**
  * @param inUpdate What this chunk added; valid only for the duration of the call.
- * @return false to cancel; `transcribe` then returns `Error::Cancelled`.
+ * @return false to cancel; `transcribe` then returns `Error::Cancelled`. Only
+ *         checked once per chunk: `TranscribeOptions::should_cancel` is the
+ *         prompt way.
  */
 using NoteCallback = std::function<bool(const TranscriptionUpdate& inUpdate)>;
 

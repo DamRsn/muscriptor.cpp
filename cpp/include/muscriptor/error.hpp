@@ -18,7 +18,8 @@ enum class Error {
     // A chunk's conditioning prefix plus its teacher-forced prologue does not
     // fit in the KV cache. Generation itself is clamped rather than overflowing.
     ContextOverflow,
-    // The progress callback returned false.
+    // A `should_cancel` predicate returned true, or a `NoteCallback` returned
+    // false.
     Cancelled,
     // Something in `TranscribeOptions` is not usable, e.g. an instrument that is
     // not one of the named groups.

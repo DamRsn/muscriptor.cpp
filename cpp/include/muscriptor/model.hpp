@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <span>
 #include <vector>
@@ -47,6 +48,11 @@ struct ModelOptions {
     // Run on the GPU when the build and the machine both have one, otherwise on
     // the CPU. CPU and GPU results are not bit-identical.
     bool use_gpu = true;
+    // Load only. Polled after backend init, after each weight tensor and before
+    // `load` returns; returning true makes `load` throw `Error::Cancelled`.
+    std::function<bool()> should_cancel;
+    // Load only. Fraction of the weight bytes uploaded, 0 to 1.
+    std::function<void(float)> on_progress;
 };
 
 /**
@@ -160,6 +166,14 @@ public:
 
     /** @return Threads currently configured, with 0 resolved. Never 0. */
     int numThreads() const;
+
+    /**
+     * Cancellation for subsequent evaluations: polled before each decode step
+     * of `generate`, and on the CPU backend at every graph node. Returning true
+     * makes the evaluation throw `Error::Cancelled`, leaving the KV cache
+     * partly written; `generate` resets it. Empty to clear.
+     */
+    void setShouldCancel(std::function<bool()> inShouldCancel);
 
     /**
      * First forward pass of a chunk: prepends the conditioning embedding and

@@ -48,6 +48,25 @@ namespace
         return unique;
     }
 
+    /** Installs a cancel predicate on a model for one call, and removes it on every exit. */
+    class ScopedCancel
+    {
+    public:
+        ScopedCancel(Model& ioModel, const CancelPredicate& inShouldCancel)
+            : mModel(ioModel)
+        {
+            mModel.setShouldCancel(inShouldCancel);
+        }
+
+        ~ScopedCancel() { mModel.setShouldCancel({}); }
+
+        ScopedCancel(const ScopedCancel&) = delete;
+        ScopedCancel& operator=(const ScopedCancel&) = delete;
+
+    private:
+        Model& mModel;
+    };
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -136,9 +155,14 @@ std::expected<std::vector<Note>, Error> Transcriber::Impl::transcribe(std::span<
         return std::unexpected(Error::InvalidArgument);
     }
 
+    const ScopedCancel scoped_cancel(mModel, inOptions.should_cancel);
     const int n_chunks = Transcriber::chunkCount(inSamples.size());
 
     for (int chunk = 0; chunk < n_chunks; ++chunk) {
+        if (inOptions.should_cancel && inOptions.should_cancel()) {
+            return std::unexpected(Error::Cancelled);
+        }
+
         _fillChunk(inSamples, chunk);
 
         // The tail is zero-padded and the padding is *not* masked away: the
@@ -251,6 +275,8 @@ std::expected<Transcriber, Error> Transcriber::load(const std::filesystem::path&
     try {
         ModelOptions options;
         options.use_gpu = inOptions.use_gpu;
+        options.should_cancel = std::move(inOptions.should_cancel);
+        options.on_progress = std::move(inOptions.on_progress);
         // The hparams are checked against these constants below.
         options.n_ctx = requiredContext(melFramesPerChunk(SAMPLE_RATE / Vocabulary::FRAME_RATE));
 

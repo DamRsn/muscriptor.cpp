@@ -48,7 +48,7 @@ namespace
 
 } // namespace
 
-GgufFile::GgufFile(const std::filesystem::path& inPath, ggml_backend_t inBackend)
+GgufFile::GgufFile(const std::filesystem::path& inPath, ggml_backend_t inBackend, const UploadObserver& inObserver)
     : mPath(inPath)
 {
     // Existence is checked separately because gguf_init_from_file answers null
@@ -91,12 +91,29 @@ GgufFile::GgufFile(const std::filesystem::path& inPath, ggml_backend_t inBackend
         }
 
         const std::int64_t n_tensors = gguf_get_n_tensors(mGguf);
+        std::size_t bytes_total = 0;
+
+        for (std::int64_t i = 0; i < n_tensors; ++i) {
+            bytes_total += ggml_nbytes(ggml_get_tensor(mCtx, gguf_get_tensor_name(mGguf, i)));
+        }
+
+        std::size_t bytes_done = 0;
+
+        if (inObserver) {
+            inObserver(bytes_done, bytes_total);
+        }
 
         for (std::int64_t i = 0; i < n_tensors; ++i) {
             const char* name = gguf_get_tensor_name(mGguf, i);
             ggml_tensor* tensor = ggml_get_tensor(mCtx, name);
             const std::size_t offset = gguf_get_data_offset(mGguf) + gguf_get_tensor_offset(mGguf, i);
             uploadTensorData(file, offset, tensor);
+
+            bytes_done += ggml_nbytes(tensor);
+
+            if (inObserver) {
+                inObserver(bytes_done, bytes_total);
+            }
         }
     } catch (...) {
         _release();
