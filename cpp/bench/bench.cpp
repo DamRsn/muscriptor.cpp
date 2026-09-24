@@ -9,6 +9,7 @@
 #include "format.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -107,6 +108,69 @@ struct Args {
     int repeats = 1;
     bool use_gpu = true;
     bool transcribe = false;
+    bool load_profile = false;
+    // Milliseconds after the call starts at which should_cancel starts returning true.
+    std::optional<double> cancel_after_ms;
+};
+
+/**
+ * A `should_cancel` predicate that times itself: the longest stretch between
+ * two polls, which bounds how long a cancel waits, and with a deadline, how
+ * long the call takes to return once the deadline has passed.
+ */
+class PollTimer
+{
+public:
+    explicit PollTimer(std::optional<double> inCancelAfterMs)
+        : mCancelAfterMs(inCancelAfterMs)
+    {
+    }
+
+    void start()
+    {
+        mStart = Clock::now();
+        mLast = mStart;
+    }
+
+    bool poll()
+    {
+        const Clock::time_point now = Clock::now();
+        const double gap = std::chrono::duration<double, std::milli>(now - mLast).count();
+
+        if (mPolls == 0) {
+            mFirstPollMs = gap;
+        }
+
+        else {
+            mMaxGapMs = std::max(mMaxGapMs, gap);
+        }
+
+        mLast = now;
+        ++mPolls;
+        return mCancelAfterMs.has_value()
+               && std::chrono::duration<double, std::milli>(now - mStart).count() >= *mCancelAfterMs;
+    }
+
+    /** Print the poll statistics, and how long a cancel took, once the call has returned. */
+    void report(double inReturnedAfterMs) const
+    {
+        std::printf(
+            "polls     %8zu   first after %.1f ms, then at most %.2f ms apart\n", mPolls, mFirstPollMs, mMaxGapMs);
+
+        if (mCancelAfterMs.has_value()) {
+            std::printf("cancel    %8.1f ms   after the request at %.0f ms\n",
+                        inReturnedAfterMs - *mCancelAfterMs,
+                        *mCancelAfterMs);
+        }
+    }
+
+private:
+    std::optional<double> mCancelAfterMs;
+    Clock::time_point mStart;
+    Clock::time_point mLast;
+    std::size_t mPolls = 0;
+    double mFirstPollMs = 0.0;
+    double mMaxGapMs = 0.0;
 };
 
 /** @return Percentile `inQ` of an already-sorted `inSorted`. */
@@ -123,7 +187,8 @@ double percentile(const std::vector<double>& inSorted, double inQ)
 
 constexpr const char* USAGE = "usage: %s [--size small|medium|large] [--device cpu|gpu] [--weight-dtype f16|f32]\n"
                               "       [--weights f.gguf] [--audio f.wav] [--steps N] [--threads N]\n"
-                              "       [--chunk K] [--repeats N] [--transcribe]\n";
+                              "       [--chunk K] [--repeats N] [--transcribe] [--load-profile]\n"
+                              "       [--cancel-after MS]\n";
 
 /**
  * Parse the command line.
@@ -217,6 +282,14 @@ std::optional<Args> parseArgs(int inArgc, char** inArgv)
             args.transcribe = true;
         }
 
+        else if (flag == "--load-profile") {
+            args.load_profile = true;
+        }
+
+        else if (flag == "--cancel-after") {
+            args.cancel_after_ms = count();
+        }
+
         else {
             std::fprintf(stderr, USAGE, inArgv[0]);
             return std::nullopt;
@@ -229,6 +302,14 @@ std::optional<Args> parseArgs(int inArgc, char** inArgv)
 
     if (args.repeats < 1) {
         throw std::runtime_error("--repeats must be at least 1");
+    }
+
+    if (args.cancel_after_ms.has_value() && (*args.cancel_after_ms < 0 || !(args.transcribe || args.load_profile))) {
+        throw std::runtime_error("--cancel-after needs a non-negative value and --transcribe or --load-profile");
+    }
+
+    if (args.transcribe && args.load_profile) {
+        throw std::runtime_error("--transcribe and --load-profile are separate modes");
     }
 
     if (args.weights.empty()) {
@@ -250,6 +331,56 @@ int main(int argc, char** argv)
         }
 
         const Args& args = *parsed;
+
+        // Load mode: where the load's time goes, measured through the public
+        // callbacks: backend initialisation up to the first poll, the weight
+        // upload between the first and last progress report, and setup after.
+        if (args.load_profile) {
+            PollTimer timer(args.cancel_after_ms);
+            std::optional<double> upload_began_ms;
+            double upload_ended_ms = 0.0;
+
+            msl::LoadOptions load_options;
+            load_options.use_gpu = args.use_gpu;
+            load_options.should_cancel = [&timer] { return timer.poll(); };
+
+            const Clock::time_point began = Clock::now();
+
+            load_options.on_progress = [&](float inProgress) {
+                const double now_ms = millisSince(began);
+
+                if (!upload_began_ms.has_value()) {
+                    upload_began_ms = now_ms;
+                }
+
+                if (inProgress >= 1.0f) {
+                    upload_ended_ms = now_ms;
+                }
+            };
+
+            timer.start();
+            const std::expected<msl::Transcriber, msl::Error> transcriber =
+                msl::Transcriber::load(args.weights, load_options);
+            const double total_ms = millisSince(began);
+
+            std::printf("weights   %s\n", args.weights.filename().string().c_str());
+
+            if (transcriber.has_value()) {
+                std::printf("backend   %8s\n", transcriber->backendName());
+                std::printf("init      %8.1f ms   (to the first progress report)\n", upload_began_ms.value_or(0.0));
+                std::printf("upload    %8.1f ms\n", upload_ended_ms - upload_began_ms.value_or(0.0));
+                std::printf("setup     %8.1f ms\n", total_ms - upload_ended_ms);
+            }
+
+            else if (transcriber.error() != msl::Error::Cancelled) {
+                throw std::runtime_error(msl::format("load failed: {}", msl::describe(transcriber.error())));
+            }
+
+            std::printf("load      %8.1f ms%s\n", total_ms, transcriber.has_value() ? "" : "   (cancelled)");
+            timer.report(total_ms);
+            return 0;
+        }
+
         const std::vector<float> signal = readFloatWav(args.audio);
 
         // Whole-signal mode: the number a caller actually feels, rather than
@@ -275,13 +406,33 @@ int main(int argc, char** argv)
 
             const double loaded_ms = millisSince(began);
 
+            PollTimer timer(args.cancel_after_ms);
+
             msl::TranscribeOptions transcribe_options;
             transcribe_options.n_threads = args.threads;
+            transcribe_options.should_cancel = [&timer] { return timer.poll(); };
 
             began = Clock::now();
-            const std::expected<std::vector<msl::Note>, msl::Error> notes =
+            timer.start();
+            std::expected<std::vector<msl::Note>, msl::Error> notes =
                 transcriber->transcribe(signal, transcribe_options);
-            const double elapsed_ms = millisSince(began);
+            double elapsed_ms = millisSince(began);
+
+            if (!notes.has_value() && notes.error() == msl::Error::Cancelled && args.cancel_after_ms.has_value()) {
+                timer.report(elapsed_ms);
+
+                // The same instance again, uncancelled: it must give the
+                // result a fresh instance would.
+                transcribe_options.should_cancel = {};
+                began = Clock::now();
+                notes = transcriber->transcribe(signal, transcribe_options);
+                elapsed_ms = millisSince(began);
+                std::printf("rerun     after the cancelled call\n");
+            }
+
+            else {
+                timer.report(elapsed_ms);
+            }
 
             if (!notes.has_value()) {
                 throw std::runtime_error(msl::format("transcribe failed: {}", msl::describe(notes.error())));
@@ -296,6 +447,21 @@ int main(int argc, char** argv)
             std::printf("transcribe %7.2f s\n", elapsed_ms / 1000.0);
             std::printf("speed     %8.2fx real time\n", audio_s / (elapsed_ms / 1000.0));
             std::printf("notes     %8zu\n", notes->size());
+
+            // Compared across runs: a transcription that follows a cancelled one
+            // must print the same digest as one that does not.
+            std::uint64_t note_digest = 1469598103934665603ull;
+
+            for (const msl::Note& note: *notes) {
+                for (const std::int64_t field: {std::llround(note.onset * 1e6),
+                                                std::llround(note.offset * 1e6),
+                                                static_cast<long long>(note.pitch),
+                                                static_cast<long long>(note.program)}) {
+                    note_digest = (note_digest ^ static_cast<std::uint64_t>(field)) * 1099511628211ull;
+                }
+            }
+
+            std::printf("digest    %016llx\n", static_cast<unsigned long long>(note_digest));
             return 0;
         }
 

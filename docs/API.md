@@ -28,6 +28,19 @@ can branch on these names.
 CPU and GPU results are not bit-identical, since the backends accumulate in
 different orders. To reproduce an earlier run exactly, use the same backend.
 
+Loading reads the whole weights file. GPU backend initialisation can take much
+longer the first time it runs than afterwards
+([`PERFORMANCE.md`](PERFORMANCE.md#loading)). Two optional callbacks, both
+called on the loading thread, cover it:
+
+- **`should_cancel`** is polled after backend initialisation, after each weight
+  tensor, and once more before `load` returns. When it returns `true`, `load`
+  returns `Error::Cancelled`. Backend initialisation itself cannot be
+  interrupted.
+- **`on_progress`** reports the fraction of weight bytes uploaded, from 0 to 1,
+  never decreasing. The first call, with 0, comes once the backend is up; until
+  then there is nothing to measure progress against.
+
 ## Transcribing
 
 ```c++
@@ -89,13 +102,13 @@ lists them.
 Program 96 maps to `Drums`. This matches the reference
 ([`TOKENIZER.md`](TOKENIZER.md) § 5).
 
-## Progress, streaming and cancellation
+## Progress and streaming
 
 The optional callback is called synchronously, on the thread that called
 `transcribe`, once after each chunk and once more at the end. An empty signal
-gets no calls. `new_notes` is only valid during the call. Return `false` to
-stop: `transcribe` then returns
-`Error::Cancelled`.
+gets no calls. `new_notes` is only valid during the call. Returning `false`
+stops the transcription: `transcribe` then returns `Error::Cancelled`. That
+only happens between chunks; `TranscribeOptions::should_cancel` stops sooner.
 
 ```c++
 struct TranscriptionUpdate {
@@ -120,6 +133,31 @@ struct TranscriptionUpdate {
 - **`progress`** runs from 0 to 1 and never decreases. The last two calls both
   report 1; `transcribe` returning is the end signal.
 
+## Cancellation
+
+`LoadOptions::should_cancel` and `TranscribeOptions::should_cancel` take a
+`CancelPredicate`, a `std::function<bool()>`. The library polls it on the
+thread that called `load` or `transcribe`, and stops with `Error::Cancelled`
+once it returns `true`. It is polled often, so it should be cheap, typically
+an atomic flag set from another thread.
+
+A cancel takes effect at the next poll. How far apart polls are:
+
+| Phase | Polled | Longest stretch without a poll |
+|---|---|---|
+| Backend initialisation | Once, after it | All of it |
+| Weight upload | After each tensor | One tensor read and upload |
+| Transcription, CPU | Before each chunk and decode step, and at every graph node | One graph node |
+| Transcription, Metal or Vulkan | Before each chunk and decode step | One prefill |
+
+On a GPU the prefill is a single graph that ggml cannot interrupt: ggml-metal
+checks its abort callback only while a GPU capture is recording, and
+ggml-vulkan has none. [`PERFORMANCE.md`](PERFORMANCE.md) has the prefill and
+decode-step timings.
+
+A `Transcriber` stays usable after a cancelled `transcribe`: the next call
+starts from a clean state.
+
 ## Errors
 
 `Transcriber` never throws; failures come back as `msl::Error` values.
@@ -133,7 +171,7 @@ struct TranscriptionUpdate {
 | `UnsupportedCheckpointVersion` | A GGUF with a different `muscriptor.format_version`, or none, as in a GGUF of another model |
 | `OutOfMemory` | Allocation failed, or no backend could be initialised |
 | `ContextOverflow` | A chunk's prefix plus its forced prompt does not fit in the KV cache |
-| `Cancelled` | The callback returned `false` |
+| `Cancelled` | A `should_cancel` predicate returned `true`, or the note callback returned `false` |
 | `InvalidArgument` | Unusable `TranscribeOptions`, e.g. an instrument outside the named groups |
 | `Internal` | A bug in the library |
 
@@ -186,6 +224,7 @@ Model::load(gguf, options)                           → Model
   .encodeAudio(samples)                              → conditioning embedding
   .encodeConditioning(spectrum, n_frames, n_samples) → conditioning embedding
   .setInstrumentRows(rows) / .setForbiddenTokens(ids) / .setNumThreads(n)
+  .setShouldCancel(predicate)
   .reset() / .prefill(conditioning, n_frames, tokens) → logits
   .decode(token)                                     → logits
   .generate(conditioning, n_frames, max_tokens, eos_id[, prompt]) → token ids
@@ -198,3 +237,7 @@ Model::load(gguf, options)                           → Model
 - `generate` with a prompt returns the prompt followed by the generated tokens.
 - `reset()` leaves the instrument rows and the forbidden-token mask in place;
   they apply to the whole transcription.
+- `setShouldCancel` installs a predicate polled before each decode step of
+  `generate`, and at every graph node on the CPU. A cancelled evaluation throws
+  `Error::Cancelled` and leaves the KV cache partly written; `generate` resets
+  it. `ModelOptions::should_cancel` and `on_progress` apply to `load` only.

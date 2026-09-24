@@ -31,6 +31,8 @@ To reproduce:
 ./cpp/build/bench/muscriptor_bench --transcribe             # whole signal
 ./cpp/build/bench/muscriptor_bench --steps 400              # per phase
 ./cpp/build/bench/muscriptor_bench --size small --device cpu --threads 4
+./cpp/build/bench/muscriptor_bench --load-profile               # load breakdown
+./cpp/build/bench/muscriptor_bench --transcribe --cancel-after 4000
 ```
 
 In per-phase mode, the benchmark prints a digest of the tokens it decoded. If a
@@ -46,6 +48,50 @@ measurement.
 For stable numbers, run one configuration per process on an idle machine.
 Never run two benchmarks or test runs at the same time: ggml's threads wait on
 each other between ops, and competing for cores slows both runs down severalfold.
+
+## Loading
+
+`muscriptor_bench --load-profile` times `Transcriber::load` through its public
+callbacks. **Init** runs up to the first `on_progress` call: backend
+initialisation, reading the GGUF metadata, and allocating the weight buffer.
+**Upload** runs from the first `on_progress` call to the last, reading and
+uploading every tensor. **Setup** covers the rest: the KV cache, the CPU copy of
+the conditioning weights, and the position table.
+
+M1 Pro, weights file already in the page cache, two runs per row, in ms:
+
+| Size | Backend | Init | Upload | Setup | Total |
+|---|---|---|---|---|---|
+| `small` | CPU | 0.6–0.7 | 66–69 | 28 | 94–97 |
+| `small` | Metal | 53–57 | 60–61 | 31 | 144–149 |
+| `medium` | CPU | 0.9–1.1 | 188–199 | 50–51 | 239–250 |
+| `medium` | Metal | 63–66 | 174–177 | 57–60 | 297–299 |
+| `large` | Metal | 135–146 | 747–769 | 135–178 | 1017–1093 |
+
+The first Metal initialisation of a newly built executable took 19.4 s and
+20.4 s in two separate builds. ggml-metal is built with its kernel source
+embedded (`GGML_METAL_EMBED_LIBRARY`) and compiles it at initialisation; macOS
+caches the compiled library, and every run after that took about 40 ms.
+
+## Cancellation
+
+A cancel waits for the next poll of `should_cancel` ([`API.md`](API.md#cancellation)).
+`--load-profile` and `--transcribe` print how far apart the polls were, and
+`--cancel-after MS` cancels at that time and prints how long the call then took
+to return. After a cancelled `--transcribe`, the benchmark transcribes again
+with the same instance and prints the note digest, which should match an
+uncancelled run.
+
+M1 Pro, `medium`, 15 s fixture:
+
+| | CPU | Metal |
+|---|---|---|
+| Load: longest gap between polls after init | 50–51 ms | 56–60 ms |
+| Transcription: longest gap between polls | 151 ms | 165–176 ms |
+| Transcription: return after `--cancel-after 500` / `4000` | 7 / 55 ms | 0.4 / 25 ms |
+
+On Metal the longest gap is a prefill, which is one graph. During load it is
+the setup after the last tensor, and at `large` on Metal that reached 178 ms.
 
 ## Threads
 

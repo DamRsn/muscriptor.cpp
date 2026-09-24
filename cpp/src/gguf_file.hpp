@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -24,7 +25,13 @@ namespace msl
 class GgufFile
 {
 public:
-    GgufFile(const std::filesystem::path& inPath, ggml_backend_t inBackend);
+    /**
+     * Called with the tensor bytes uploaded so far and their total: once before
+     * the first tensor, then after each one. It may throw to abandon the load.
+     */
+    using UploadObserver = std::function<void(std::size_t inBytesDone, std::size_t inBytesTotal)>;
+
+    GgufFile(const std::filesystem::path& inPath, ggml_backend_t inBackend, const UploadObserver& inObserver = {});
     ~GgufFile();
 
     GgufFile(GgufFile&&) = delete;
