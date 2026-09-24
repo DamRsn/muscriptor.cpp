@@ -68,10 +68,8 @@ M1 Pro, weights file already in the page cache, two runs per row, in ms:
 | `medium` | Metal | 63–66 | 174–177 | 57–60 | 297–299 |
 | `large` | Metal | 135–146 | 747–769 | 135–178 | 1017–1093 |
 
-The first Metal initialisation of a newly built executable took 19.4 s and
-20.4 s in two separate builds. ggml-metal is built with its kernel source
-embedded (`GGML_METAL_EMBED_LIBRARY`) and compiles it at initialisation; macOS
-caches the compiled library, and every run after that took about 40 ms.
+The first Metal initialisation after a new build took about 20 s: ggml-metal
+compiles its embedded kernel source, and later runs are fast.
 
 ## Cancellation
 
@@ -88,7 +86,6 @@ M1 Pro, `medium`, 15 s fixture:
 |---|---|---|
 | Load: longest gap between polls after init | 50–51 ms | 56–60 ms |
 | Transcription: longest gap between polls | 151 ms | 165–176 ms |
-| Transcription: return after `--cancel-after 500` / `4000` | 7 / 55 ms | 0.4 / 25 ms |
 
 On Metal the longest gap is a prefill, which is one graph. During load it is
 the setup after the last tensor, and at `large` on Metal that reached 178 ms.

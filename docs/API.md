@@ -146,14 +146,14 @@ A cancel takes effect at the next poll. How far apart polls are:
 | Phase | Polled | Longest stretch without a poll |
 |---|---|---|
 | Backend initialisation | Once, after it | All of it |
+| Reading the file header, allocating the weights | Once, after it | All of it |
 | Weight upload | After each tensor | One tensor read and upload |
+| Setup after the upload | Once, after it | All of it |
 | Transcription, CPU | Before each chunk and decode step, and at every graph node | One graph node |
 | Transcription, Metal or Vulkan | Before each chunk and decode step | One prefill |
 
-On a GPU the prefill is a single graph that ggml cannot interrupt: ggml-metal
-checks its abort callback only while a GPU capture is recording, and
-ggml-vulkan has none. [`PERFORMANCE.md`](PERFORMANCE.md) has the prefill and
-decode-step timings.
+On a GPU the prefill is a single graph that ggml cannot interrupt.
+[`PERFORMANCE.md`](PERFORMANCE.md) has the prefill and decode-step timings.
 
 A `Transcriber` stays usable after a cancelled `transcribe`: the next call
 starts from a clean state.

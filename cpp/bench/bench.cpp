@@ -9,8 +9,8 @@
 #include "format.hpp"
 
 #include <algorithm>
-#include <cmath>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -114,9 +114,8 @@ struct Args {
 };
 
 /**
- * A `should_cancel` predicate that times itself: the longest stretch between
- * two polls, which bounds how long a cancel waits, and with a deadline, how
- * long the call takes to return once the deadline has passed.
+ * A `should_cancel` that records the gaps between polls and, with a deadline,
+ * starts returning true once it passes.
  */
 class PollTimer
 {
@@ -151,13 +150,13 @@ public:
                && std::chrono::duration<double, std::milli>(now - mStart).count() >= *mCancelAfterMs;
     }
 
-    /** Print the poll statistics, and how long a cancel took, once the call has returned. */
-    void report(double inReturnedAfterMs) const
+    /** Print the poll statistics and, if the call was cancelled, how long it took to return. */
+    void report(double inReturnedAfterMs, bool inCancelled) const
     {
         std::printf(
             "polls     %8zu   first after %.1f ms, then at most %.2f ms apart\n", mPolls, mFirstPollMs, mMaxGapMs);
 
-        if (mCancelAfterMs.has_value()) {
+        if (inCancelled && mCancelAfterMs.has_value()) {
             std::printf("cancel    %8.1f ms   after the request at %.0f ms\n",
                         inReturnedAfterMs - *mCancelAfterMs,
                         *mCancelAfterMs);
@@ -377,7 +376,7 @@ int main(int argc, char** argv)
             }
 
             std::printf("load      %8.1f ms%s\n", total_ms, transcriber.has_value() ? "" : "   (cancelled)");
-            timer.report(total_ms);
+            timer.report(total_ms, !transcriber.has_value());
             return 0;
         }
 
@@ -419,7 +418,7 @@ int main(int argc, char** argv)
             double elapsed_ms = millisSince(began);
 
             if (!notes.has_value() && notes.error() == msl::Error::Cancelled && args.cancel_after_ms.has_value()) {
-                timer.report(elapsed_ms);
+                timer.report(elapsed_ms, true);
 
                 // The same instance again, uncancelled: it must give the
                 // result a fresh instance would.
@@ -431,7 +430,7 @@ int main(int argc, char** argv)
             }
 
             else {
-                timer.report(elapsed_ms);
+                timer.report(elapsed_ms, false);
             }
 
             if (!notes.has_value()) {
