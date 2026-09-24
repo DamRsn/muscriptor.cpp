@@ -31,8 +31,7 @@ To reproduce:
 ./cpp/build/bench/muscriptor_bench --transcribe             # whole signal
 ./cpp/build/bench/muscriptor_bench --steps 400              # per phase
 ./cpp/build/bench/muscriptor_bench --size small --device cpu --threads 4
-./cpp/build/bench/muscriptor_bench --load-profile               # load breakdown
-./cpp/build/bench/muscriptor_bench --transcribe --cancel-after 4000
+./cpp/build/bench/muscriptor_bench --load-profile           # load breakdown
 ```
 
 In per-phase mode, the benchmark prints a digest of the tokens it decoded. If a
@@ -74,11 +73,7 @@ compiles its embedded kernel source, and later runs are fast.
 ## Cancellation
 
 A cancel waits for the next poll of `should_cancel` ([`API.md`](API.md#cancellation)).
-`--load-profile` and `--transcribe` print how far apart the polls were, and
-`--cancel-after MS` cancels at that time and prints how long the call then took
-to return. After a cancelled `--transcribe`, the benchmark transcribes again
-with the same instance and prints the note digest, which should match an
-uncancelled run.
+`--load-profile` and `--transcribe` print how far apart the polls were.
 
 M1 Pro, `medium`, 15 s fixture:
 
