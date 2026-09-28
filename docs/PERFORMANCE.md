@@ -67,8 +67,9 @@ M1 Pro, weights file already in the page cache, two runs per row, in ms:
 | `medium` | Metal | 63–66 | 174–177 | 57–60 | 297–299 |
 | `large` | Metal | 135–146 | 747–769 | 135–178 | 1017–1093 |
 
-The first Metal initialisation after a new build took about 20 s: ggml-metal
-compiles its embedded kernel source, and later runs are fast.
+Built with `MUSCRIPTOR_METAL_PRECOMPILED=OFF`, Metal init on a shader-cache
+miss takes about 20 s, and no cancellation poll runs until it ends
+([`BUILDING.md`](BUILDING.md#metal)).
 
 ## Cancellation
 

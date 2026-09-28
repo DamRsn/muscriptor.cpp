@@ -18,7 +18,8 @@ To build against a local ggml checkout instead, add
 |---|---|---|
 | `MUSCRIPTOR_GGML_FP32_ACCUM` | `ON` | On ARM, `ggml-cpu` sums F16 matmuls in fp32 instead of fp16. See below. |
 | `MUSCRIPTOR_NATIVE` | `OFF` | Tunes the build for the machine it is compiled on (ggml's `GGML_NATIVE`). For local benchmarking only: the binary may crash on other CPUs. |
-| `MUSCRIPTOR_METAL` | `ON` on Apple | Builds the Metal backend, with its shaders embedded in the binary. |
+| `MUSCRIPTOR_METAL` | `ON` on Apple | Builds the Metal backend. |
+| `MUSCRIPTOR_METAL_PRECOMPILED` | `ON` with Metal | Compiles the Metal shaders into `.metallib` files at build time, which the executable ships. `OFF` embeds the shader source and compiles it at run time ([Metal](#metal)). |
 | `MUSCRIPTOR_VULKAN` | `ON` elsewhere, when the Vulkan SDK is found | Builds the Vulkan backend. |
 | `MUSCRIPTOR_BUILD_TESTS` | `ON` when top-level | Builds `muscriptor_tests`. `-DBUILD_TESTING=OFF` also turns it off. |
 | `MUSCRIPTOR_BUILD_BENCH` | `ON` when top-level | Builds `muscriptor_bench`. |
@@ -78,6 +79,72 @@ cmake --preset parity && cmake --build --preset parity
   kernels once per tree and would silently fall back to generic scalar code.
   For a universal binary, build `macos-arm64` and `macos-x86_64` separately
   and combine the results.
+
+## Metal
+
+The shaders reach the GPU in one of two ways, chosen by
+`MUSCRIPTOR_METAL_PRECOMPILED`.
+
+- **`ON`, the default: precompiled.** The build compiles them into
+  `default.metallib` and, with the macOS 26 SDK or later,
+  `ggml-tensor.metallib`. The executable must ship both.
+- **`OFF`: compiled at run time.** The shader source is embedded in the binary
+  and compiled when Metal is first initialised. macOS caches the result per
+  host application. On a cache miss (the first run in each application, and
+  again after an OS update or a ggml update) initialisation takes about 20 s,
+  and no cancellation poll runs during it.
+
+M1 Pro, `medium`, `muscriptor_bench --transcribe` on the 15 s fixture, one run
+each. "Cold" is a fresh application bundle id, so macOS has nothing cached:
+
+| | Load, cold | Load, warm | Transcribe, cold | Transcribe, warm |
+|---|---|---|---|---|
+| Precompiled | 333 ms | 268 ms | 10.07 s | 9.84 s |
+| Compiled at run time | 20 188 ms | 284 ms | 10.09 s | 9.84 s |
+
+Both runs produced the same number of notes. Either way, the GPU-specific code
+is generated on the user's machine, the first time each kernel runs.
+
+**Building.** Needs Xcode's Metal toolchain; configuring fails without it:
+
+```bash
+xcodebuild -downloadComponent MetalToolchain
+```
+
+`default.metallib` is built for `CMAKE_OSX_DEPLOYMENT_TARGET`. The tensor API
+kernels in `ggml-tensor.metallib` need macOS 26 and run only on M5-class GPUs.
+With an older SDK the file is not built, configuring warns, and those GPUs use
+ggml's other kernels. The files come to about 15 MB, and the build compiles
+the flash-attention kernels for about 18 s.
+
+**Shipping.** ggml looks for `default.metallib` in the `Resources` of the bundle
+that contains its code, then next to the running executable. After
+`add_subdirectory`, call:
+
+```cmake
+muscriptor_add_metal_library(<target>)
+```
+
+for each executable, app or plugin target that links the library. A bundle
+target gets the files in `Contents/Resources`; any other executable gets them
+copied beside it. It does nothing when `MUSCRIPTOR_METAL_PRECOMPILED` is off.
+
+**A missing `default.metallib` is not an error.** Metal fails to initialise and
+the library runs on the CPU, several times slower. Check that the files are in
+the shipped bundle, or that `backendName()` returns `"Metal"`. The test suite
+checks it.
+
+**Changes to ggml.** With `MUSCRIPTOR_METAL_PRECOMPILED` on, the build:
+
+- rewrites one line of the fetched ggml's `src/ggml-metal/CMakeLists.txt`,
+  because ggml passes the Metal compiler both a deployment target and
+  `-mtargetos=macos26.0` for `ggml-tensor.metallib`, and the compiler rejects
+  the pair. Configuring with the option off restores the line. A local
+  checkout given through `FETCHCONTENT_SOURCE_DIR_GGML` is never edited: when
+  it needs the change, configuring stops and says so.
+- renames ggml's `GGMLMetalClass`, the Objective-C class whose bundle ggml
+  searches. Class names are shared across a process, so another copy of ggml
+  in the same host could otherwise point the search at its own bundle.
 
 ## x86 baseline
 
