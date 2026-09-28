@@ -1,9 +1,13 @@
 #pragma once
 
+#include "muscriptor/device.hpp"
+
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -45,9 +49,10 @@ struct ModelOptions {
     // 0 selects the performance-core count. Ignored on a GPU backend. Results
     // do not depend on it: ggml partitions matmuls by row.
     int n_threads = 0;
-    // Run on the GPU when the build and the machine both have one, otherwise on
-    // the CPU. CPU and GPU results are not bit-identical.
-    bool use_gpu = true;
+    // Index into `availableDevices()`, or empty for `autoDevice`'s pick with a
+    // CPU fallback. An explicit device that fails to initialise throws
+    // `Error::DeviceUnavailable`. CPU and GPU results are not bit-identical.
+    std::optional<std::size_t> device;
     // Load only. Polled after backend init, after each weight tensor and before
     // `load` returns; returning true makes `load` throw `Error::Cancelled`.
     std::function<bool()> should_cancel;
@@ -81,12 +86,8 @@ public:
 
     const Hparams& hparams() const;
 
-    /**
-     * @return Backend in use: `"CPU"`, `"Metal"` or `"Vulkan"`. `use_gpu` is a
-     *         request; this says whether it was granted. Stable, unlike ggml's
-     *         device names.
-     */
-    const char* backendName() const;
+    /** @return The device in use, as listed by `availableDevices()`. */
+    const Device& device() const;
 
     /**
      * Node count of the most recent evaluation graph, and the capacity it was

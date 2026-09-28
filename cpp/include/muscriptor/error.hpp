@@ -15,6 +15,9 @@ enum class Error {
     // A muscriptor GGUF whose `muscriptor.format_version` this build does not read.
     UnsupportedCheckpointVersion,
     OutOfMemory,
+    // The device `LoadOptions::device` names does not exist or failed to
+    // initialise.
+    DeviceUnavailable,
     // A chunk's conditioning prefix plus its teacher-forced prologue does not
     // fit in the KV cache. Generation itself is clamped rather than overflowing.
     ContextOverflow,

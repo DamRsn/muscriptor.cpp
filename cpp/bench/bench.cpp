@@ -9,6 +9,7 @@
 #include "format.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -105,7 +106,9 @@ struct Args {
     int threads = 0;
     int chunk = 0;
     int repeats = 1;
-    bool use_gpu = true;
+    // cpu, gpu (the first GPU listed), auto, or an index into availableDevices().
+    std::string device = MUSCRIPTOR_TEST_DEVICE;
+    bool list_devices = false;
     bool transcribe = false;
     bool load_profile = false;
 };
@@ -159,9 +162,10 @@ double percentile(const std::vector<double>& inSorted, double inQ)
     return inSorted[index];
 }
 
-constexpr const char* USAGE = "usage: %s [--size small|medium|large] [--device cpu|gpu] [--weight-dtype f16|f32]\n"
-                              "       [--weights f.gguf] [--audio f.wav] [--steps N] [--threads N]\n"
-                              "       [--chunk K] [--repeats N] [--transcribe] [--load-profile]\n";
+constexpr const char* USAGE =
+    "usage: %s [--size small|medium|large] [--device cpu|gpu|auto|N] [--weight-dtype f16|f32]\n"
+    "       [--weights f.gguf] [--audio f.wav] [--steps N] [--threads N]\n"
+    "       [--chunk K] [--repeats N] [--transcribe] [--load-profile] [--list-devices]\n";
 
 /**
  * Parse the command line.
@@ -182,7 +186,6 @@ std::optional<Args> parseArgs(int inArgc, char** inArgv)
         testdata_env != nullptr ? std::filesystem::path(testdata_env) : std::filesystem::path(MUSCRIPTOR_TESTDATA_DIR);
 
     Args args;
-    args.use_gpu = std::string_view(MUSCRIPTOR_TEST_DEVICE) == "gpu";
     args.audio = testdata / "audio" / "fixture_3chunks_16k.wav";
 
     for (int i = 1; i < inArgc; ++i) {
@@ -218,13 +221,16 @@ std::optional<Args> parseArgs(int inArgc, char** inArgv)
         }
 
         else if (flag == "--device") {
-            const std::string value = next();
+            args.device = next();
 
-            if (value != "cpu" && value != "gpu") {
-                throw std::runtime_error(msl::format("--device must be cpu or gpu, got '{}'", value));
+            const bool is_index = !args.device.empty() && std::ranges::all_of(args.device, [](char inChar) {
+                return std::isdigit(static_cast<unsigned char>(inChar)) != 0;
+            });
+
+            if (args.device != "cpu" && args.device != "gpu" && args.device != "auto" && !is_index) {
+                throw std::runtime_error(
+                    msl::format("--device must be cpu, gpu, auto or a device index, got '{}'", args.device));
             }
-
-            args.use_gpu = value == "gpu";
         }
 
         else if (flag == "--weights") {
@@ -251,6 +257,10 @@ std::optional<Args> parseArgs(int inArgc, char** inArgv)
             args.repeats = count();
         }
 
+        else if (flag == "--list-devices") {
+            args.list_devices = true;
+        }
+
         else if (flag == "--transcribe") {
             args.transcribe = true;
         }
@@ -273,8 +283,9 @@ std::optional<Args> parseArgs(int inArgc, char** inArgv)
         throw std::runtime_error("--repeats must be at least 1");
     }
 
-    if (args.transcribe && args.load_profile) {
-        throw std::runtime_error("--transcribe and --load-profile are separate modes");
+    if (static_cast<int>(args.transcribe) + static_cast<int>(args.load_profile) + static_cast<int>(args.list_devices)
+        > 1) {
+        throw std::runtime_error("--transcribe, --load-profile and --list-devices are separate modes");
     }
 
     if (args.weights.empty()) {
@@ -282,6 +293,37 @@ std::optional<Args> parseArgs(int inArgc, char** inArgv)
     }
 
     return args;
+}
+
+/**
+ * @param inDevice The `--device` value.
+ * @param inDevices What `availableDevices()` returned.
+ * @return The load option it names.
+ */
+std::optional<std::size_t> loadDevice(const std::string& inDevice, const std::vector<msl::Device>& inDevices)
+{
+    const std::size_t cpu = inDevices.size() - 1;
+
+    if (inDevice == "auto") {
+        return std::nullopt;
+    }
+
+    if (inDevice == "cpu") {
+        return cpu;
+    }
+
+    // As in the tests: a GPU build on a machine without one degrades to Auto.
+    if (inDevice == "gpu") {
+        return cpu > 0 ? std::optional<std::size_t>(0) : std::nullopt;
+    }
+
+    return static_cast<std::size_t>(std::stoul(inDevice));
+}
+
+void printDevice(const msl::Device& inDevice)
+{
+    std::printf("backend   %8s\n", inDevice.backend.c_str());
+    std::printf("device    %s\n", inDevice.name.c_str());
 }
 
 } // namespace
@@ -297,6 +339,32 @@ int main(int argc, char** argv)
 
         const Args& args = *parsed;
 
+        // The first call pays for ggml's device enumeration; timed here so the
+        // other modes' numbers do not include it.
+        const Clock::time_point enumeration_began = Clock::now();
+        const std::vector<msl::Device> devices = msl::availableDevices();
+        const double enumeration_ms = millisSince(enumeration_began);
+
+        if (args.list_devices) {
+            const std::size_t auto_device = msl::autoDevice(devices);
+
+            for (std::size_t i = 0; i < devices.size(); ++i) {
+                const msl::Device& device = devices[i];
+                std::printf("%2zu  %-6s  %-10s  %8.2f GB  %s%s\n",
+                            i,
+                            device.backend.c_str(),
+                            device.integrated ? "integrated" : "",
+                            static_cast<double>(device.memory_total) / 1e9,
+                            device.name.c_str(),
+                            i == auto_device ? "  [auto]" : "");
+            }
+
+            std::printf("enumerated in %.1f ms\n", enumeration_ms);
+            return 0;
+        }
+
+        const std::optional<std::size_t> device = loadDevice(args.device, devices);
+
         // Load mode: where the load's time goes, measured through the public
         // callbacks: backend initialisation up to the first poll, the weight
         // upload between the first and last progress report, and setup after.
@@ -306,7 +374,7 @@ int main(int argc, char** argv)
             double upload_ended_ms = 0.0;
 
             msl::LoadOptions load_options;
-            load_options.use_gpu = args.use_gpu;
+            load_options.device = device;
             load_options.should_cancel = [&timer] { return timer.poll(); };
 
             const Clock::time_point began = Clock::now();
@@ -333,7 +401,8 @@ int main(int argc, char** argv)
             }
 
             std::printf("weights   %s\n", args.weights.filename().string().c_str());
-            std::printf("backend   %8s\n", transcriber->backendName());
+            printDevice(transcriber->device());
+            std::printf("devices   %8.1f ms   (the process's first availableDevices call)\n", enumeration_ms);
             std::printf("init      %8.1f ms   (to the first progress report)\n", upload_began_ms.value_or(0.0));
             std::printf("upload    %8.1f ms\n", upload_ended_ms - upload_began_ms.value_or(0.0));
             std::printf("setup     %8.1f ms\n", total_ms - upload_ended_ms);
@@ -355,7 +424,7 @@ int main(int argc, char** argv)
             }
 
             msl::LoadOptions load_options;
-            load_options.use_gpu = args.use_gpu;
+            load_options.device = device;
 
             Clock::time_point began = Clock::now();
             std::expected<msl::Transcriber, msl::Error> transcriber =
@@ -386,7 +455,7 @@ int main(int argc, char** argv)
             const double audio_s = static_cast<double>(signal.size()) / msl::Transcriber::SAMPLE_RATE;
 
             std::printf("weights   %s\n", args.weights.filename().string().c_str());
-            std::printf("backend   %8s\n", transcriber->backendName());
+            printDevice(transcriber->device());
             std::printf("load      %8.1f ms\n", loaded_ms);
             std::printf("audio     %8.2f s   (%d chunks)\n", audio_s, msl::Transcriber::chunkCount(signal.size()));
             std::printf("transcribe %7.2f s\n", elapsed_ms / 1000.0);
@@ -407,12 +476,12 @@ int main(int argc, char** argv)
         Clock::time_point start = Clock::now();
         msl::Model::Options options;
         options.n_threads = args.threads;
-        options.use_gpu = args.use_gpu;
+        options.device = device;
         msl::Model model = msl::Model::load(args.weights, options);
         const double load_ms = millisSince(start);
 
         std::printf("weights   %s\n", args.weights.filename().string().c_str());
-        std::printf("backend   %8s\n", model.backendName());
+        printDevice(model.device());
         if (args.threads > 0) {
             std::printf("threads   %8d\n", args.threads);
         }

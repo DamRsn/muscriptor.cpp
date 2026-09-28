@@ -1,6 +1,7 @@
 #include "muscriptor/model.hpp"
 #include "muscriptor/error.hpp"
 
+#include "device_backend.hpp"
 #include "format.hpp"
 #include "gguf_file.hpp"
 #include "instrument_groups.hpp"
@@ -24,24 +25,6 @@
 
 #if defined(__APPLE__)
 #include <sys/sysctl.h>
-#endif
-
-#if defined(MUSCRIPTOR_HAS_METAL)
-#include <ggml-metal.h>
-#endif
-
-#if defined(MUSCRIPTOR_HAS_VULKAN)
-#include <ggml-vulkan.h>
-
-#if defined(_WIN32)
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#endif
 #endif
 
 namespace msl
@@ -90,72 +73,6 @@ namespace
         if (inShouldCancel && inShouldCancel()) {
             throw Exception(Error::Cancelled, "cancelled");
         }
-    }
-
-#if defined(MUSCRIPTOR_HAS_VULKAN)
-    /**
-     * @return True when a Vulkan call is safe to make. On Windows
-     *         `vulkan-1.dll` is delay-loaded and a missing loader would raise
-     *         a structured exception on the first call.
-     */
-    bool vulkanLoaderPresent()
-    {
-#if defined(_WIN32)
-        return LoadLibraryW(L"vulkan-1.dll") != nullptr;
-#else
-        return true;
-#endif
-    }
-#endif
-
-    /**
-     * Picks the backend to run on.
-     *
-     * A GPU is a request rather than a requirement: a build without a GPU
-     * backend, a machine with no usable device, or a caller that asked for the
-     * CPU all land on the same fallback. Nothing above here needs to know which one it got --
-     * the GGUF loader, the KV cache and the graphs are all written against the
-     * backend interface.
-     *
-     * @param inUseGpu Whether to try a GPU backend first.
-     * @param outName Set to the stable public name of whatever came back.
-     * @return An initialised backend, or null if even the CPU one failed.
-     */
-    ggml_backend_t initBackend([[maybe_unused]] bool inUseGpu, const char** outName)
-    {
-        // Stable public names, not `ggml_backend_name`'s device names ("MTL0"):
-        // a host may branch on them.
-        *outName = "CPU";
-
-#if defined(MUSCRIPTOR_HAS_METAL)
-        if (inUseGpu) {
-            if (ggml_backend_t metal = ggml_backend_metal_init(); metal != nullptr) {
-                *outName = "Metal";
-                return metal;
-            }
-        }
-#endif
-
-#if defined(MUSCRIPTOR_HAS_VULKAN)
-        if (inUseGpu && vulkanLoaderPresent()) {
-            // ggml_backend_vk_init has no failure path of its own: a loader
-            // with no usable device throws out of the instance creation the
-            // device query performs, and so does a device that refuses
-            // creation. The count check is what keeps index 0 in range; an
-            // out-of-range index asserts rather than throws.
-            try {
-                if (ggml_backend_vk_get_device_count() > 0) {
-                    if (ggml_backend_t vulkan = ggml_backend_vk_init(0); vulkan != nullptr) {
-                        *outName = "Vulkan";
-                        return vulkan;
-                    }
-                }
-            } catch (...) {
-            }
-        }
-#endif
-
-        return ggml_backend_cpu_init();
     }
 
     /**
@@ -322,9 +239,7 @@ struct Model::Impl {
     Options opts;
 
     ggml_backend_t backend = nullptr;
-    // Stable public name for `backend`, set by initBackend. A string literal,
-    // so it outlives the Impl and needs no storage.
-    const char* backend_name = "CPU";
+    Device device;
     std::unique_ptr<GgufFile> file;
     Weights w;
 
@@ -594,11 +509,9 @@ Model Model::load(const std::filesystem::path& inGgufPath, Options inOptions)
     impl.opts.on_progress = {};
 
     // Not interruptible: on a GPU this can include compiling shaders.
-    impl.backend = initBackend(inOptions.use_gpu, &impl.backend_name);
-
-    if (impl.backend == nullptr) {
-        throw Exception(Error::OutOfMemory, "failed to initialise a ggml backend");
-    }
+    InitialisedBackend initialised = initBackend(inOptions.device);
+    impl.backend = initialised.backend;
+    impl.device = std::move(initialised.device);
 
     throwIfCancelled(inOptions.should_cancel);
 
@@ -775,9 +688,9 @@ const Hparams& Model::hparams() const
     return mImpl->hp;
 }
 
-const char* Model::backendName() const
+const Device& Model::device() const
 {
-    return mImpl->backend_name;
+    return mImpl->device;
 }
 
 int Model::graphNodeCount() const

@@ -86,7 +86,7 @@ public:
                                                        const TranscribeOptions& inOptions,
                                                        const NoteCallback& inCallback);
 
-    const char* backendName() const { return mModel.backendName(); }
+    const Device& device() const { return mModel.device(); }
 
 private:
     /**
@@ -274,7 +274,7 @@ std::expected<Transcriber, Error> Transcriber::load(const std::filesystem::path&
 {
     try {
         ModelOptions options;
-        options.use_gpu = inOptions.use_gpu;
+        options.device = inOptions.device;
         options.should_cancel = std::move(inOptions.should_cancel);
         options.on_progress = std::move(inOptions.on_progress);
         // The hparams are checked against these constants below.
@@ -302,9 +302,9 @@ std::expected<Transcriber, Error> Transcriber::load(const std::filesystem::path&
     }
 }
 
-const char* Transcriber::backendName() const
+const Device& Transcriber::device() const
 {
-    return mImpl->backendName();
+    return mImpl->device();
 }
 
 std::expected<std::vector<Note>, Error> Transcriber::transcribe(std::span<const float> inSamples,

@@ -221,6 +221,7 @@ set_target_properties(pffft PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # STATIC explicitly, so a consumer's BUILD_SHARED_LIBS does not make it shared.
 
 add_library(muscriptor_ggml STATIC
+    src/device.cpp
     src/error.cpp
     src/gguf_file.cpp
     src/instrument_groups.cpp
@@ -253,7 +254,7 @@ if(MUSCRIPTOR_VULKAN)
     target_compile_definitions(muscriptor_ggml PRIVATE MUSCRIPTOR_HAS_VULKAN)
 
     # Delay-load vulkan-1.dll so a binary still loads on a machine without Vulkan;
-    # initBackend checks for the DLL before its first Vulkan call. INTERFACE so
+    # device.cpp checks for the DLL before its first Vulkan call. INTERFACE so
     # the flags reach the consuming executable. MinGW has no delay-load.
     if(WIN32 AND NOT MINGW)
         target_link_libraries(muscriptor_ggml INTERFACE delayimp)

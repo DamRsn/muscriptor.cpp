@@ -1,5 +1,6 @@
 #pragma once
 
+#include "muscriptor/device.hpp"
 #include "muscriptor/error.hpp"
 #include "muscriptor/note.hpp"
 
@@ -8,6 +9,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -54,11 +56,13 @@ struct TranscribeOptions {
 /** Options fixed at load: they decide where the weights and KV cache live. */
 struct LoadOptions {
     /**
-     * Run on the GPU when the build and the machine both have one, otherwise on
-     * the CPU; `Transcriber::backendName` reports which. CPU and GPU results
-     * are not bit-identical.
+     * Index into `availableDevices()`. Empty selects `autoDevice`'s pick, and
+     * the CPU if that fails to initialise. An explicit device is not a request:
+     * if it fails, `load` returns `Error::DeviceUnavailable`.
+     * `Transcriber::device` reports where the model ended up. CPU and GPU
+     * results are not bit-identical.
      */
-    bool use_gpu = true;
+    std::optional<std::size_t> device;
 
     /**
      * Polled after backend initialisation, after each weight tensor, and once
@@ -144,11 +148,8 @@ public:
 
     static std::expected<Transcriber, Error> load(const std::filesystem::path& inGgufPath, LoadOptions inOptions = {});
 
-    /**
-     * @return Backend in use: `"CPU"`, `"Metal"` or `"Vulkan"`. These names are
-     *         stable, unlike ggml's device names.
-     */
-    const char* backendName() const;
+    /** @return The device the model runs on, as listed by `availableDevices()`. */
+    const Device& device() const;
 
     ~Transcriber();
     Transcriber(Transcriber&&) noexcept;
