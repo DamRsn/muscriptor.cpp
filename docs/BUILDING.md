@@ -98,6 +98,11 @@ The same set is used on every OS.
   ```bash
   CC=clang CXX=clang++ RC=llvm-rc cmake -S cpp -B cpp/build -G Ninja
   ```
+- **clang-cl iterator debugging.** With clang-cl, ggml compiles its Vulkan
+  backend with `_ITERATOR_DEBUG_LEVEL=0`. Everything linked with it must use the
+  same level, or a Debug link fails on `/failifmismatch`. The library builds
+  with it and passes it to consumers through `muscriptor_ggml`. A consumer's
+  own C++ static libraries that don't link `muscriptor_ggml` need it too.
 - **Run time.** The only dependency is the system loader, `vulkan-1.dll`.
   - With MSVC and clang-cl it is delay-loaded, through INTERFACE link options
     that reach the consuming binary. The library checks it can load the DLL
