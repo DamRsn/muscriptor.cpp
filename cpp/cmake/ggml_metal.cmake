@@ -70,8 +70,8 @@ its code, then next to the running executable: a bundle target gets the files
 in Contents/Resources, any other executable gets them copied beside it. Does
 nothing unless MUSCRIPTOR_METAL_PRECOMPILED is on.
 
-A missing default.metallib is not an error at run time: Metal fails to
-initialise and Model::load falls back to the CPU.
+Without default.metallib, Metal is still listed but fails to initialise: an
+Auto load runs on the CPU, one that names the device gets DeviceUnavailable.
 
 inTarget  An executable, app bundle or plugin bundle target.
 ]]

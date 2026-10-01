@@ -16,6 +16,8 @@ const char* describe(Error inError)
             return "checkpoint format version is not the one this build reads";
         case Error::OutOfMemory:
             return "out of memory";
+        case Error::DeviceUnavailable:
+            return "the selected compute device is not available";
         case Error::ContextOverflow:
             return "a chunk did not fit in the model context";
         case Error::Cancelled:

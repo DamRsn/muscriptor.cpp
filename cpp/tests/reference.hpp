@@ -6,10 +6,12 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -121,6 +123,13 @@ private:
  * configuration rather than something the library picks.
  */
 bool gpu_enabled();
+
+/**
+ * The load option for the current configuration: for `--device gpu` the first
+ * GPU `availableDevices()` lists, integrated or not, or Auto when there is none;
+ * for `--device cpu` the CPU entry.
+ */
+std::optional<std::size_t> load_device();
 
 /**
  * The converted weights for the current configuration, loaded once and

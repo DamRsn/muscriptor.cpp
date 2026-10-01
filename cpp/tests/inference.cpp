@@ -234,7 +234,7 @@ Transcriber& sharedTranscriber()
     static PerConfig<Transcriber> instance;
     return instance.get([] {
         LoadOptions options;
-        options.use_gpu = gpu_enabled();
+        options.device = load_device();
         std::expected<Transcriber, Error> loaded = Transcriber::load(Reference::fp32().weights_path(), options);
 
         if (!loaded.has_value()) {

@@ -17,8 +17,8 @@ using namespace msl::test;
 
 TEST_CASE("the backend is the one that was asked for", "[backend]")
 {
-    const std::string_view name = shared_model().backendName();
-    INFO("backendName() reports: " << name);
+    const std::string_view name = shared_model().device().backend;
+    INFO("device() reports: " << shared_model().device().name << " (" << name << ")");
 
     if (!gpu_enabled()) {
         // An explicit opt-out has one legal answer, on every build and machine.

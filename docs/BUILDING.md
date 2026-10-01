@@ -25,8 +25,9 @@ To build against a local ggml checkout instead, add
 | `MUSCRIPTOR_BUILD_BENCH` | `ON` when top-level | Builds `muscriptor_bench`. |
 | `MUSCRIPTOR_TEST_SIZE`, `_DEVICE`, `_WEIGHT_DTYPE` | `medium`, `gpu`, `f16` | Default run options for the tests and benchmark ([`TESTING.md`](TESTING.md#run-options)). |
 
-Building a GPU backend does not force its use: at run time the library uses the
-GPU when `use_gpu` is set and a device is available, and the CPU otherwise.
+Building a GPU backend does not force its use: at run time the caller picks a
+device, or leaves it to Auto, which uses the CPU when no GPU is available
+([`API.md`](API.md#devices)).
 
 The build always sets:
 
@@ -91,16 +92,19 @@ The shaders reach the GPU in one of two ways, chosen by
 - **`OFF`: compiled at run time.** The shader source is embedded in the binary
   and compiled when Metal is first initialised. macOS caches the result per
   host application. On a cache miss (the first run in each application, and
-  again after an OS update or a ggml update) initialisation takes about 20 s,
-  and no cancellation poll runs during it.
+  again after an OS update or a ggml update) this takes about 20 s. It happens
+  in the process's first device enumeration, `availableDevices()` or the first
+  load, and neither can be cancelled during it.
 
-M1 Pro, `medium`, `muscriptor_bench --transcribe` on the 15 s fixture, one run
-each. "Cold" is a fresh application bundle id, so macOS has nothing cached:
+M1 Pro, `medium`, on the 15 s fixture, one run each. "Cold" is a fresh
+application bundle id, so macOS has nothing cached. Devices and Load are from
+`muscriptor_bench --load-profile`, Transcribe from `--transcribe`, in separate
+runs:
 
-| | Load, cold | Load, warm | Transcribe, cold | Transcribe, warm |
-|---|---|---|---|---|
-| Precompiled | 333 ms | 268 ms | 10.07 s | 9.84 s |
-| Compiled at run time | 20 188 ms | 284 ms | 10.09 s | 9.84 s |
+| | Devices, cold | Devices, warm | Load, cold | Load, warm | Transcribe, cold | Transcribe, warm |
+|---|---|---|---|---|---|---|
+| Precompiled | 88 ms | 31 ms | 239 ms | 242 ms | 9.89 s | 9.67 s |
+| Compiled at run time | 19 886 ms | 42 ms | 243 ms | 244 ms | 9.91 s | 9.64 s |
 
 Both runs produced the same number of notes. Either way, the GPU-specific code
 is generated on the user's machine, the first time each kernel runs.
@@ -129,10 +133,11 @@ for each executable, app or plugin target that links the library. A bundle
 target gets the files in `Contents/Resources`; any other executable gets them
 copied beside it. It does nothing when `MUSCRIPTOR_METAL_PRECOMPILED` is off.
 
-**A missing `default.metallib` is not an error.** Metal fails to initialise and
-the library runs on the CPU, several times slower. Check that the files are in
-the shipped bundle, or that `backendName()` returns `"Metal"`. The test suite
-checks it.
+**A missing `default.metallib` is not reported as such.** `availableDevices()`
+still lists the Metal device, but it fails to initialise: a load that names it
+returns `Error::DeviceUnavailable`, and Auto runs on the CPU, several times
+slower. Check that the files are in the shipped bundle, or that
+`device().backend` is `"Metal"` after an Auto load. The test suite checks it.
 
 **Changes to ggml.** With `MUSCRIPTOR_METAL_PRECOMPILED` on, the build:
 
@@ -167,12 +172,19 @@ The same set is used on every OS.
 - **Run time.** The only dependency is the system loader, `vulkan-1.dll`.
   - With MSVC and clang-cl it is delay-loaded, through INTERFACE link options
     that reach the consuming binary. The library checks it can load the DLL
-    before its first Vulkan call, and falls back to the CPU if not.
+    before its first Vulkan call, device enumeration included, and lists no
+    Vulkan devices if it cannot.
   - MinGW links the loader directly, so a MinGW binary does not load at all
     without `vulkan-1.dll`.
 - **The ggml registry.** ggml's global backend registry initialises Vulkan the
   first time it is used. On Windows, without `vulkan-1.dll`, that raises a
   delay-load exception that its C++ `catch` does not handle. The library never
-  touches the registry, and a host on Windows must not either.
+  touches the registry, and a host on Windows must not either:
+  `availableDevices()` enumerates through the Vulkan backend's own registry,
+  behind the same loader check.
+- **Device list.** ggml enumerates Vulkan devices once per process, so a GPU
+  that appears or disappears later is seen only after a restart.
+  `GGML_VK_VISIBLE_DEVICES` (comma-separated physical device indices) narrows
+  the list, which is handy for testing a device that has gone away.
 - **Debugging.** A `GGML_VULKAN_CHECK_RESULTS=ON` build of ggml compares every
   Vulkan op against the CPU and reports the first one that differs.

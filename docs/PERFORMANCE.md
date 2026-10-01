@@ -51,25 +51,27 @@ each other between ops, and competing for cores slows both runs down severalfold
 ## Loading
 
 `muscriptor_bench --load-profile` times `Transcriber::load` through its public
-callbacks. **Init** runs up to the first `on_progress` call: backend
-initialisation, reading the GGUF metadata, and allocating the weight buffer.
-**Upload** runs from the first `on_progress` call to the last, reading and
-uploading every tensor. **Setup** covers the rest: the KV cache, the CPU copy of
-the conditioning weights, and the position table.
+callbacks. It calls `availableDevices()` first, and times it separately as
+**Devices**: that call initialises the GPU backends, once per process, whether
+or not the model then runs on a GPU. **Init** runs up to the first
+`on_progress` call: backend initialisation, reading the GGUF metadata, and
+allocating the weight buffer. **Upload** runs from the first `on_progress` call
+to the last, reading and uploading every tensor. **Setup** covers the rest: the
+KV cache, the CPU copy of the conditioning weights, and the position table.
 
 M1 Pro, weights file already in the page cache, two runs per row, in ms:
 
-| Size | Backend | Init | Upload | Setup | Total |
-|---|---|---|---|---|---|
-| `small` | CPU | 0.6–0.7 | 66–69 | 28 | 94–97 |
-| `small` | Metal | 53–57 | 60–61 | 31 | 144–149 |
-| `medium` | CPU | 0.9–1.1 | 188–199 | 50–51 | 239–250 |
-| `medium` | Metal | 63–66 | 174–177 | 57–60 | 297–299 |
-| `large` | Metal | 135–146 | 747–769 | 135–178 | 1017–1093 |
+| Size | Backend | Devices | Init | Upload | Setup | Load total |
+|---|---|---|---|---|---|---|
+| `small` | CPU | 25–30 | 0.6 | 59 | 26 | 86 |
+| `small` | Metal | 25–27 | 7–8 | 54–56 | 29–30 | 90–93 |
+| `medium` | CPU | 26 | 0.7 | 179–180 | 48–49 | 228–229 |
+| `medium` | Metal | 25–26 | 21–23 | 165–168 | 54 | 240–245 |
+| `large` | Metal | 26–29 | 88–89 | 735–740 | 135 | 958–964 |
 
-Built with `MUSCRIPTOR_METAL_PRECOMPILED=OFF`, Metal init on a shader-cache
-miss takes about 20 s, and no cancellation poll runs until it ends
-([`BUILDING.md`](BUILDING.md#metal)).
+**Load total** excludes Devices. Built with `MUSCRIPTOR_METAL_PRECOMPILED=OFF`,
+the first Metal initialisation on a shader-cache miss takes about 20 s, inside
+the Devices step ([`BUILDING.md`](BUILDING.md#metal)).
 
 ## Cancellation
 
@@ -80,11 +82,11 @@ M1 Pro, `medium`, 15 s fixture:
 
 | | CPU | Metal |
 |---|---|---|
-| Load: longest gap between polls after init | 50–51 ms | 56–60 ms |
+| Load: longest gap between polls after init | 47–49 ms | 53 ms |
 | Transcription: longest gap between polls | 151 ms | 165–176 ms |
 
 On Metal the longest gap is a prefill, which is one graph. During load it is
-the setup after the last tensor, and at `large` on Metal that reached 178 ms.
+the setup after the last tensor, and at `large` on Metal that reached 190 ms.
 
 ## Threads
 

@@ -127,7 +127,7 @@ results (`cpp/tests/inference.hpp`).
 | Option | Default | Effect |
 |---|---|---|
 | `--size` | `medium` | Checkpoint: `testdata/weights/muscriptor-<size>-<dtype>.gguf` and `testdata/refs/<size>/` |
-| `--device` | `gpu`, or `cpu` with `--weight-dtype f32` | Backend. Without a GPU backend in the build, `gpu` falls back to the CPU |
+| `--device` | `gpu`, or `cpu` with `--weight-dtype f32` | `gpu` is the first GPU `availableDevices()` lists, integrated or not. Without one, it falls back to the CPU and the backend test fails on a GPU build |
 | `--weight-dtype` | `f16` | Which converted weights to load |
 | `--full` | off | Also run the `[slow]` tests. Naming any test or tag implies it |
 
@@ -146,7 +146,8 @@ these are skipped too:
   fail with the command that generates the missing data.
 
 `muscriptor_bench` takes the same `--size`, `--device` and `--weight-dtype`
-options ([`PERFORMANCE.md`](PERFORMANCE.md)).
+options ([`PERFORMANCE.md`](PERFORMANCE.md)). Its `--device` also takes `auto`
+or an index from `--list-devices`.
 
 ### Tiers
 
