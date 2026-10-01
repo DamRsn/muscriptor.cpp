@@ -274,13 +274,24 @@ bool gpu_enabled()
     return currentConfig().device == Device::gpu;
 }
 
+std::optional<std::size_t> load_device()
+{
+    const std::size_t cpu = availableDevices().size() - 1;
+
+    if (gpu_enabled()) {
+        return cpu > 0 ? std::optional<std::size_t>(0) : std::nullopt;
+    }
+
+    return cpu;
+}
+
 Model& shared_model()
 {
     static PerConfig<Model> model;
     return model.get([] {
         const Reference& ref = Reference::fp32();
         Model::Options options;
-        options.use_gpu = gpu_enabled();
+        options.device = load_device();
         return std::make_unique<Model>(Model::load(ref.weights_path(), options));
     });
 }

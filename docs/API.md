@@ -17,13 +17,8 @@ writing and threading.
 
 ```c++
 std::expected<msl::Transcriber, msl::Error> t =
-    msl::Transcriber::load("muscriptor-medium-f16.gguf", {.use_gpu = true});
+    msl::Transcriber::load("muscriptor-medium-f16.gguf");
 ```
-
-`LoadOptions::use_gpu` (default `true`) runs on Metal or Vulkan when the build
-has a GPU backend and the machine has a usable device, and on the CPU
-otherwise. `backendName()` returns `"CPU"`, `"Metal"` or `"Vulkan"`, and a host
-can branch on these names.
 
 CPU and GPU results are not bit-identical, since the backends accumulate in
 different orders. To reproduce an earlier run exactly, use the same backend.
@@ -40,6 +35,36 @@ called on the loading thread, cover it:
 - **`on_progress`** reports the fraction of weight bytes uploaded, from 0 to 1,
   never decreasing. The first call, with 0, comes once the backend is up; until
   then there is nothing to measure progress against.
+
+### Devices
+
+`LoadOptions::device` picks where the model runs:
+
+- **Empty, the default: Auto.** The first discrete GPU, otherwise the first
+  integrated GPU, and the CPU when there is no GPU or it fails to initialise.
+  `autoDevice(devices)` says which one that is before loading.
+- **An index into `availableDevices()`.** A requirement, not a request: if
+  that device fails to initialise, or the index is out of range, `load`
+  returns `Error::DeviceUnavailable` rather than running somewhere else.
+
+`availableDevices()` lists the GPUs in the backend's own order, then the CPU,
+which is always last, so the list is never empty. Each `Device` has a `name`
+(e.g. `"NVIDIA GeForce RTX 4070"`, `"Apple M1 Pro"`, `"CPU"`), a `backend`
+(`"Metal"`, `"Vulkan"` or `"CPU"`, stable enough for a host to branch on), an
+`integrated` flag, and `memory_total` in bytes (0 when unknown).
+
+- Names are not unique: two identical cards share one. Indices are stable only
+  within a process; a host that stores a choice should store the name.
+- The list is built on the first call and is fixed for the life of the
+  process: ggml enumerates GPUs once, so a GPU added or removed later shows up
+  after a restart.
+- The first call initialises the GPU backends and can be slow
+  ([`PERFORMANCE.md`](PERFORMANCE.md#loading)). Make it off a UI thread.
+  It is thread-safe.
+- Metal exposes one device, the system default GPU. Vulkan lists the discrete
+  and integrated GPUs that ggml supports, and marks integrated ones.
+
+`Transcriber::device()` returns the entry the model actually runs on.
 
 ## Transcribing
 
@@ -170,6 +195,7 @@ starts from a clean state.
 | `UnsupportedArch` | Audio framing other than 16 kHz / 100 Hz / hop 160, or inconsistent attention geometry |
 | `UnsupportedCheckpointVersion` | A GGUF with a different `muscriptor.format_version`, or none, as in a GGUF of another model |
 | `OutOfMemory` | Allocation failed, or no backend could be initialised |
+| `DeviceUnavailable` | `LoadOptions::device` is out of range, or that device failed to initialise |
 | `ContextOverflow` | A chunk's prefix plus its forced prompt does not fit in the KV cache |
 | `Cancelled` | A `should_cancel` predicate returned `true`, or the note callback returned `false` |
 | `InvalidArgument` | Unusable `TranscribeOptions`, e.g. an instrument outside the named groups |

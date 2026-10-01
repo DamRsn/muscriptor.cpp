@@ -22,6 +22,7 @@
  * `setLogCallback` -- log.hpp.
  */
 
+#include "muscriptor/device.hpp"
 #include "muscriptor/error.hpp"
 #include "muscriptor/log.hpp"
 #include "muscriptor/note.hpp"

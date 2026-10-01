@@ -60,7 +60,7 @@ ffmpeg -i song.mp3 -ac 1 -ar 16000 -c:a pcm_f32le song.wav   # 16 kHz mono float
 ./cpp/build/bench/muscriptor_bench --transcribe --audio song.wav
 ```
 
-The benchmark prints the backend, the real-time factor and the number of notes.
+The benchmark prints the backend and device, the real-time factor and the number of notes.
 In your own code:
 
 ```c++

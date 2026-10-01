@@ -24,8 +24,9 @@ To build against a local ggml checkout instead, add
 | `MUSCRIPTOR_BUILD_BENCH` | `ON` when top-level | Builds `muscriptor_bench`. |
 | `MUSCRIPTOR_TEST_SIZE`, `_DEVICE`, `_WEIGHT_DTYPE` | `medium`, `gpu`, `f16` | Default run options for the tests and benchmark ([`TESTING.md`](TESTING.md#run-options)). |
 
-Building a GPU backend does not force its use: at run time the library uses the
-GPU when `use_gpu` is set and a device is available, and the CPU otherwise.
+Building a GPU backend does not force its use: at run time the caller picks a
+device, or leaves it to Auto, which uses the CPU when no GPU is available
+([`API.md`](API.md#devices)).
 
 The build always sets:
 
@@ -100,12 +101,19 @@ The same set is used on every OS.
 - **Run time.** The only dependency is the system loader, `vulkan-1.dll`.
   - With MSVC and clang-cl it is delay-loaded, through INTERFACE link options
     that reach the consuming binary. The library checks it can load the DLL
-    before its first Vulkan call, and falls back to the CPU if not.
+    before its first Vulkan call, device enumeration included, and lists no
+    Vulkan devices if it cannot.
   - MinGW links the loader directly, so a MinGW binary does not load at all
     without `vulkan-1.dll`.
 - **The ggml registry.** ggml's global backend registry initialises Vulkan the
   first time it is used. On Windows, without `vulkan-1.dll`, that raises a
   delay-load exception that its C++ `catch` does not handle. The library never
-  touches the registry, and a host on Windows must not either.
+  touches the registry, and a host on Windows must not either:
+  `availableDevices()` enumerates through the Vulkan backend's own registry,
+  behind the same loader check.
+- **Device list.** ggml enumerates Vulkan devices once per process, so a GPU
+  that appears or disappears later is seen only after a restart.
+  `GGML_VK_VISIBLE_DEVICES` (comma-separated physical device indices) narrows
+  the list, which is handy for testing a device that has gone away.
 - **Debugging.** A `GGML_VULKAN_CHECK_RESULTS=ON` build of ggml compares every
   Vulkan op against the CPU and reports the first one that differs.
