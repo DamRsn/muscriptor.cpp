@@ -149,11 +149,17 @@ std::vector<Device> availableDevices()
 
 std::size_t autoDevice(std::span<const Device> inDevices)
 {
-    const auto discrete = std::ranges::find_if(
-        inDevices, [](const Device& inDevice) { return inDevice.backend != "CPU" && !inDevice.integrated; });
+    const auto is_gpu = [](const Device& inDevice) { return inDevice.backend != "CPU"; };
 
-    if (discrete != inDevices.end()) {
-        return static_cast<std::size_t>(discrete - inDevices.begin());
+    auto pick = std::ranges::find_if(
+        inDevices, [&is_gpu](const Device& inDevice) { return is_gpu(inDevice) && !inDevice.integrated; });
+
+    if (pick == inDevices.end()) {
+        pick = std::ranges::find_if(inDevices, is_gpu);
+    }
+
+    if (pick != inDevices.end()) {
+        return static_cast<std::size_t>(pick - inDevices.begin());
     }
 
     return inDevices.empty() ? 0 : inDevices.size() - 1;

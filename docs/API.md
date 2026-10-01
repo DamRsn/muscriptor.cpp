@@ -40,9 +40,9 @@ called on the loading thread, cover it:
 
 `LoadOptions::device` picks where the model runs:
 
-- **Empty, the default: Auto.** The first GPU that is not integrated, and the
-  CPU when there is none or it fails to initialise. `autoDevice(devices)` says
-  which one that is before loading.
+- **Empty, the default: Auto.** The first discrete GPU, otherwise the first
+  integrated GPU, and the CPU when there is no GPU or it fails to initialise.
+  `autoDevice(devices)` says which one that is before loading.
 - **An index into `availableDevices()`.** A requirement, not a request: if
   that device fails to initialise, or the index is out of range, `load`
   returns `Error::DeviceUnavailable` rather than running somewhere else.

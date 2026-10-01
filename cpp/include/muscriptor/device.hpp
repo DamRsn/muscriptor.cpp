@@ -35,8 +35,8 @@ struct Device {
 std::vector<Device> availableDevices();
 
 /**
- * The device `LoadOptions::device` left empty resolves to: the first GPU that is
- * not integrated, otherwise the CPU.
+ * The device `LoadOptions::device` left empty resolves to: the first discrete
+ * GPU, otherwise the first integrated GPU, otherwise the CPU.
  *
  * @param inDevices A list from `availableDevices`.
  * @return An index into `inDevices`.
