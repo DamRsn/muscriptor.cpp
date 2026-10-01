@@ -5,7 +5,6 @@
 #include "format.hpp"
 #include "gguf_file.hpp"
 #include "instrument_groups.hpp"
-#include "log.hpp"
 #include "muscriptor/stft.hpp"
 #include "muscriptor/transcriber.hpp"
 #include "trace.hpp"
@@ -493,10 +492,6 @@ Model Model::load(const std::filesystem::path& inGgufPath, Options inOptions)
 {
     Model model;
     Impl& impl = *model.mImpl;
-
-    // Before the first ggml call of the process, so backend init never reaches
-    // ggml's own stderr handler.
-    installLogHook();
 
     if (inOptions.n_threads <= 0) {
         inOptions.n_threads = defaultThreadCount();

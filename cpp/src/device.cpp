@@ -131,8 +131,8 @@ namespace
             return ggml_backend_cpu_init();
         }
 
-        // ggml_backend_vk_init has no failure path of its own: a device that
-        // refuses creation throws.
+        // Vulkan's device init has no failure path: a device that refuses
+        // creation throws.
         try {
             return ggml_backend_dev_init(inHandle, nullptr);
         } catch (...) {
