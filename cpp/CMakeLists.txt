@@ -121,6 +121,13 @@ if(MUSCRIPTOR_VULKAN)
                 "-DMUSCRIPTOR_VULKAN=OFF builds without the Vulkan backend.")
         endif()
     endif()
+
+    # With clang-cl, ggml-vulkan sets _ITERATOR_DEBUG_LEVEL=0 on itself only. Linked
+    # statically, every other object must match or the link fails /failifmismatch.
+    # Consumers get it from muscriptor_ggml below.
+    if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        add_compile_definitions(_ITERATOR_DEBUG_LEVEL=0)
+    endif()
 else()
     set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
 endif()
@@ -252,6 +259,10 @@ endif()
 
 if(MUSCRIPTOR_VULKAN)
     target_compile_definitions(muscriptor_ggml PRIVATE MUSCRIPTOR_HAS_VULKAN)
+
+    if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        target_compile_definitions(muscriptor_ggml INTERFACE _ITERATOR_DEBUG_LEVEL=0)
+    endif()
 
     # Delay-load vulkan-1.dll so a binary still loads on a machine without Vulkan;
     # device.cpp checks for the DLL before its first Vulkan call. INTERFACE so
