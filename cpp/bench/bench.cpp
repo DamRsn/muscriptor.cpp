@@ -283,8 +283,7 @@ std::optional<Args> parseArgs(int inArgc, char** inArgv)
         throw std::runtime_error("--repeats must be at least 1");
     }
 
-    if (static_cast<int>(args.transcribe) + static_cast<int>(args.load_profile) + static_cast<int>(args.list_devices)
-        > 1) {
+    if (int(args.transcribe) + int(args.load_profile) + int(args.list_devices) > 1) {
         throw std::runtime_error("--transcribe, --load-profile and --list-devices are separate modes");
     }
 

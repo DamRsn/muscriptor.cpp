@@ -49,9 +49,8 @@ struct ModelOptions {
     // 0 selects the performance-core count. Ignored on a GPU backend. Results
     // do not depend on it: ggml partitions matmuls by row.
     int n_threads = 0;
-    // Index into `availableDevices()`, or empty for `autoDevice`'s pick with a
-    // CPU fallback. An explicit device that fails to initialise throws
-    // `Error::DeviceUnavailable`. CPU and GPU results are not bit-identical.
+    // As `LoadOptions::device`, except that an explicit device that fails
+    // throws `Error::DeviceUnavailable`.
     std::optional<std::size_t> device;
     // Load only. Polled after backend init, after each weight tensor and before
     // `load` returns; returning true makes `load` throw `Error::Cancelled`.

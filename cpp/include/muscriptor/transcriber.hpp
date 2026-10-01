@@ -56,11 +56,10 @@ struct TranscribeOptions {
 /** Options fixed at load: they decide where the weights and KV cache live. */
 struct LoadOptions {
     /**
-     * Index into `availableDevices()`. Empty selects `autoDevice`'s pick, and
-     * the CPU if that fails to initialise. An explicit device is not a request:
-     * if it fails, `load` returns `Error::DeviceUnavailable`.
-     * `Transcriber::device` reports where the model ended up. CPU and GPU
-     * results are not bit-identical.
+     * Index into `availableDevices()`, or empty for Auto: `autoDevice`'s pick,
+     * falling back to the CPU. An explicit device that fails makes `load`
+     * return `Error::DeviceUnavailable`. `Transcriber::device` reports where
+     * the model runs. CPU and GPU results are not bit-identical.
      */
     std::optional<std::size_t> device;
 
