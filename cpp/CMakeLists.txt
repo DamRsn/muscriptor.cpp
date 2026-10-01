@@ -30,13 +30,17 @@ if(APPLE AND CMAKE_OSX_ARCHITECTURES)
 endif()
 
 # Default the macOS floor to 11.0 unless the consumer set one. The Metal shader
-# compiler does not read CMAKE_OSX_DEPLOYMENT_TARGET, so it is told separately.
+# compiler does not read CMAKE_OSX_DEPLOYMENT_TARGET. A target OS other than
+# "macos" makes ggml pass the floor as -mtargetos=macosx<floor>, which the
+# -mtargetos=macosx26.0 that ggml-tensor.metallib adds then overrides. The
+# compiler rejects that flag next to -mmacosx-version-min.
 if(APPLE)
     if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
         set(CMAKE_OSX_DEPLOYMENT_TARGET 11.0 CACHE STRING "Minimum macOS version" FORCE)
     endif()
 
-    set(GGML_METAL_MACOSX_VERSION_MIN ${CMAKE_OSX_DEPLOYMENT_TARGET} CACHE STRING "" FORCE)
+    set(GGML_METAL_TARGET_OS macosx CACHE STRING "" FORCE)
+    set(GGML_METAL_MACOSX_VERSION_MIN "" CACHE STRING "" FORCE)
 endif()
 
 # --- ggml ---------------------------------------------------------------
@@ -77,11 +81,7 @@ foreach(MUSCRIPTOR_X86_FEATURE GGML_AVX2 GGML_BMI2 GGML_FMA)
 endforeach()
 
 # Metal, on Apple platforms only. Without a Metal device, Auto runs on the CPU.
-#
-# MUSCRIPTOR_METAL_PRECOMPILED compiles the shaders into default.metallib at
-# build time; the executable ships it (muscriptor_add_metal_library). Off, the
-# shader source is embedded in the binary and compiled on first use in each
-# host application, which takes ~20 s whenever the system's shader cache misses.
+# How the shaders are shipped: docs/BUILDING.md#metal.
 if(APPLE)
     set(MUSCRIPTOR_METAL_DEFAULT ON)
 else()
@@ -151,26 +151,11 @@ endif()
 set(GGML_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GGML_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
-# Populated but not added: SOURCE_SUBDIR names no CMakeLists.txt, so ggml's
-# build is only read by the add_subdirectory below, after the Metal fix.
 FetchContent_Declare(ggml
     GIT_REPOSITORY https://github.com/ggml-org/ggml.git
     GIT_TAG        ${MUSCRIPTOR_GGML_COMMIT}
     GIT_SHALLOW    FALSE
-    SOURCE_SUBDIR  muscriptor-added-below
 )
-FetchContent_MakeAvailable(ggml)
-
-include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/ggml_metal.cmake)
-
-if(FETCHCONTENT_SOURCE_DIR_GGML)
-    set(MUSCRIPTOR_GGML_SOURCE_WRITABLE OFF)
-else()
-    set(MUSCRIPTOR_GGML_SOURCE_WRITABLE ON)
-endif()
-
-muscriptor_fix_ggml_metal_tensor_flags(${ggml_SOURCE_DIR} ${MUSCRIPTOR_METAL_PRECOMPILED}
-                                       ${MUSCRIPTOR_GGML_SOURCE_WRITABLE})
 
 # ggml defaults BUILD_SHARED_LIBS to ON; ggml is linked statically here. Saved and
 # restored around the fetch so a consumer's own libraries are unaffected. Forced
@@ -183,7 +168,7 @@ endif()
 
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF)
-add_subdirectory(${ggml_SOURCE_DIR} ${ggml_BINARY_DIR})
+FetchContent_MakeAvailable(ggml)
 
 # Restore the normal variable too; it is the one that wins on read.
 unset(BUILD_SHARED_LIBS)
@@ -243,6 +228,8 @@ option(MUSCRIPTOR_GGML_FP32_ACCUM "Accumulate F16 matmuls in fp32 on ARM" ON)
 if(MUSCRIPTOR_GGML_FP32_ACCUM AND TARGET ggml-cpu)
     target_compile_options(ggml-cpu PRIVATE -U__ARM_FEATURE_FP16_VECTOR_ARITHMETIC)
 endif()
+
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/ggml_metal.cmake)
 
 # ggml finds default.metallib through the bundle of an Objective-C class, and
 # class names are process-wide: another ggml in the same host (a second plugin)

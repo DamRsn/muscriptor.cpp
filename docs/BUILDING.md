@@ -139,17 +139,10 @@ returns `Error::DeviceUnavailable`, and Auto runs on the CPU, several times
 slower. Check that the files are in the shipped bundle, or that
 `device().backend` is `"Metal"` after an Auto load. The test suite checks it.
 
-**Changes to ggml.** With `MUSCRIPTOR_METAL_PRECOMPILED` on, the build:
-
-- rewrites one line of the fetched ggml's `src/ggml-metal/CMakeLists.txt`,
-  because ggml passes the Metal compiler both a deployment target and
-  `-mtargetos=macos26.0` for `ggml-tensor.metallib`, and the compiler rejects
-  the pair. Configuring with the option off restores the line. A local
-  checkout given through `FETCHCONTENT_SOURCE_DIR_GGML` is never edited: when
-  it needs the change, configuring stops and says so.
-- renames ggml's `GGMLMetalClass`, the Objective-C class whose bundle ggml
-  searches. Class names are shared across a process, so another copy of ggml
-  in the same host could otherwise point the search at its own bundle.
+**ggml's Metal class.** With `MUSCRIPTOR_METAL_PRECOMPILED` on, the build
+renames ggml's `GGMLMetalClass`, the Objective-C class whose bundle ggml
+searches. Class names are shared across a process, so another copy of ggml in
+the same host could otherwise point the search at its own bundle.
 
 ## x86 baseline
 
