@@ -77,8 +77,8 @@ foreach(MUSCRIPTOR_X86_FEATURE GGML_AVX2 GGML_BMI2 GGML_FMA)
 endforeach()
 
 # Metal, on Apple platforms only, with the shaders embedded in the binary rather
-# than in a .metallib to locate at run time. Model::load still falls back to the
-# CPU when there is no device or the caller asked for the CPU.
+# than in a .metallib to locate at run time. Without a Metal device, Auto runs
+# on the CPU.
 if(APPLE)
     set(MUSCRIPTOR_METAL_DEFAULT ON)
 else()

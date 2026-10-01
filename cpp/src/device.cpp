@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <mutex>
+#include <set>
 #include <string>
 
 #if defined(MUSCRIPTOR_HAS_METAL)
@@ -97,9 +98,8 @@ namespace
 
 #if defined(MUSCRIPTOR_HAS_VULKAN)
         if (vulkanLoaderPresent()) {
-            // A loader with no usable driver throws out of instance creation;
-            // ggml_backend_vk_reg catches that and returns null, but the device
-            // queries behind it are not guarded.
+            // ggml_backend_vk_reg catches instance-creation failures; the device
+            // queries after it are not guarded.
             try {
                 if (ggml_backend_reg_t reg = ggml_backend_vk_reg(); reg != nullptr) {
                     const std::size_t count = ggml_backend_reg_dev_count(reg);
@@ -124,20 +124,35 @@ namespace
         return instance;
     }
 
-    /** @return The backend for `inHandle`, or null if it cannot be initialised. */
+    /**
+     * @return The backend for `inHandle`, or null if it cannot be initialised.
+     *         Call with initBackend's lock held.
+     */
     ggml_backend_t initHandle(ggml_backend_dev_t inHandle)
     {
         if (inHandle == nullptr) {
             return ggml_backend_cpu_init();
         }
 
+        // ggml-vulkan caches a device before creating it, so retrying one that
+        // failed would return a half-built device.
+        static std::set<ggml_backend_dev_t> failed;
+
+        if (failed.contains(inHandle)) {
+            return nullptr;
+        }
+
         // Vulkan's device init has no failure path: a device that refuses
         // creation throws.
         try {
-            return ggml_backend_dev_init(inHandle, nullptr);
+            if (ggml_backend_t backend = ggml_backend_dev_init(inHandle, nullptr); backend != nullptr) {
+                return backend;
+            }
         } catch (...) {
-            return nullptr;
         }
+
+        failed.insert(inHandle);
+        return nullptr;
     }
 
 } // namespace
@@ -149,20 +164,11 @@ std::vector<Device> availableDevices()
 
 std::size_t autoDevice(std::span<const Device> inDevices)
 {
-    const auto is_gpu = [](const Device& inDevice) { return inDevice.backend != "CPU"; };
+    const auto discrete = std::ranges::find_if(
+        inDevices, [](const Device& inDevice) { return inDevice.backend != "CPU" && !inDevice.integrated; });
 
-    auto pick = std::ranges::find_if(
-        inDevices, [&is_gpu](const Device& inDevice) { return is_gpu(inDevice) && !inDevice.integrated; });
-
-    if (pick == inDevices.end()) {
-        pick = std::ranges::find_if(inDevices, is_gpu);
-    }
-
-    if (pick != inDevices.end()) {
-        return static_cast<std::size_t>(pick - inDevices.begin());
-    }
-
-    return inDevices.empty() ? 0 : inDevices.size() - 1;
+    // GPUs come first, so index 0 is the first GPU, or the CPU when there is none.
+    return discrete != inDevices.end() ? static_cast<std::size_t>(discrete - inDevices.begin()) : 0;
 }
 
 InitialisedBackend initBackend(std::optional<std::size_t> inDevice)
