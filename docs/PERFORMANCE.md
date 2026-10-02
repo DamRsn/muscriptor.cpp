@@ -63,15 +63,15 @@ M1 Pro, weights file already in the page cache, two runs per row, in ms:
 
 | Size | Backend | Devices | Init | Upload | Setup | Load total |
 |---|---|---|---|---|---|---|
-| `small` | CPU | 37–47 | 0.6 | 58 | 26 | 85 |
-| `small` | Metal | 37–38 | 7–8 | 54 | 29 | 90–91 |
-| `medium` | CPU | 37–38 | 0.7 | 180–181 | 47–49 | 228–230 |
-| `medium` | Metal | 37 | 20–21 | 164 | 53 | 237–238 |
-| `large` | Metal | 41–62 | 87–88 | 740–768 | 140–143 | 971–994 |
+| `small` | CPU | 25–30 | 0.6 | 59 | 26 | 86 |
+| `small` | Metal | 25–27 | 7–8 | 54–56 | 29–30 | 90–93 |
+| `medium` | CPU | 26 | 0.7 | 179–180 | 48–49 | 228–229 |
+| `medium` | Metal | 25–26 | 21–23 | 165–168 | 54 | 240–245 |
+| `large` | Metal | 26–29 | 88–89 | 735–740 | 135 | 958–964 |
 
-**Load total** excludes Devices. The first Metal initialisation after a new
-build took about 20 s, inside the Devices step: ggml-metal compiles its
-embedded kernel source, and later runs are fast.
+**Load total** excludes Devices. Built with `MUSCRIPTOR_METAL_PRECOMPILED=OFF`,
+the first Metal initialisation on a shader-cache miss takes about 20 s, inside
+the Devices step ([`BUILDING.md`](BUILDING.md#metal)).
 
 ## Cancellation
 

@@ -69,6 +69,7 @@ target_compile_definitions(muscriptor_tests
 # without one, the same request must degrade to CPU.
 if(MUSCRIPTOR_METAL)
     target_compile_definitions(muscriptor_tests PRIVATE MUSCRIPTOR_HAS_METAL)
+    muscriptor_add_metal_library(muscriptor_tests)
 endif()
 
 if(MUSCRIPTOR_VULKAN)

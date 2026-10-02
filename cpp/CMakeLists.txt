@@ -30,13 +30,17 @@ if(APPLE AND CMAKE_OSX_ARCHITECTURES)
 endif()
 
 # Default the macOS floor to 11.0 unless the consumer set one. The Metal shader
-# compiler does not read CMAKE_OSX_DEPLOYMENT_TARGET, so it is told separately.
+# compiler does not read CMAKE_OSX_DEPLOYMENT_TARGET. A target OS other than
+# "macos" makes ggml pass the floor as -mtargetos=macosx<floor>, which the
+# -mtargetos=macosx26.0 that ggml-tensor.metallib adds then overrides. The
+# compiler rejects that flag next to -mmacosx-version-min.
 if(APPLE)
     if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
         set(CMAKE_OSX_DEPLOYMENT_TARGET 11.0 CACHE STRING "Minimum macOS version" FORCE)
     endif()
 
-    set(GGML_METAL_MACOSX_VERSION_MIN ${CMAKE_OSX_DEPLOYMENT_TARGET} CACHE STRING "" FORCE)
+    set(GGML_METAL_TARGET_OS macosx CACHE STRING "" FORCE)
+    set(GGML_METAL_MACOSX_VERSION_MIN "" CACHE STRING "" FORCE)
 endif()
 
 # --- ggml ---------------------------------------------------------------
@@ -76,9 +80,8 @@ foreach(MUSCRIPTOR_X86_FEATURE GGML_AVX2 GGML_BMI2 GGML_FMA)
     set(${MUSCRIPTOR_X86_FEATURE} OFF)
 endforeach()
 
-# Metal, on Apple platforms only, with the shaders embedded in the binary rather
-# than in a .metallib to locate at run time. Without a Metal device, Auto runs
-# on the CPU.
+# Metal, on Apple platforms only. Without a Metal device, Auto runs on the CPU.
+# How the shaders are shipped: docs/BUILDING.md#metal.
 if(APPLE)
     set(MUSCRIPTOR_METAL_DEFAULT ON)
 else()
@@ -87,11 +90,31 @@ endif()
 
 option(MUSCRIPTOR_METAL "Build the ggml Metal backend" ${MUSCRIPTOR_METAL_DEFAULT})
 
+include(CMakeDependentOption)
+cmake_dependent_option(MUSCRIPTOR_METAL_PRECOMPILED
+    "Precompile the Metal shaders into a .metallib the executable ships" ON "MUSCRIPTOR_METAL" OFF)
+
 if(MUSCRIPTOR_METAL)
-    set(GGML_METAL               ON  CACHE BOOL "" FORCE)
-    set(GGML_METAL_EMBED_LIBRARY ON  CACHE BOOL "" FORCE)
+    set(GGML_METAL ON CACHE BOOL "" FORCE)
+
+    if(MUSCRIPTOR_METAL_PRECOMPILED)
+        set(GGML_METAL_EMBED_LIBRARY OFF CACHE BOOL "" FORCE)
+
+        execute_process(COMMAND xcrun -sdk macosx metal --version
+                        RESULT_VARIABLE MUSCRIPTOR_METAL_TOOLCHAIN_RESULT
+                        OUTPUT_QUIET ERROR_QUIET)
+
+        if(NOT MUSCRIPTOR_METAL_TOOLCHAIN_RESULT EQUAL 0)
+            message(FATAL_ERROR
+                "MUSCRIPTOR_METAL_PRECOMPILED needs Xcode's Metal toolchain. Install it with "
+                "`xcodebuild -downloadComponent MetalToolchain`, or configure with "
+                "-DMUSCRIPTOR_METAL_PRECOMPILED=OFF to compile the shaders at run time instead.")
+        endif()
+    else()
+        set(GGML_METAL_EMBED_LIBRARY ON CACHE BOOL "" FORCE)
+    endif()
 else()
-    set(GGML_METAL               OFF CACHE BOOL "" FORCE)
+    set(GGML_METAL OFF CACHE BOOL "" FORCE)
 endif()
 
 # Vulkan, everywhere Metal is not. Needs the SDK's headers and glslc at build
@@ -211,6 +234,35 @@ endif()
 option(MUSCRIPTOR_GGML_FP32_ACCUM "Accumulate F16 matmuls in fp32 on ARM" ON)
 if(MUSCRIPTOR_GGML_FP32_ACCUM AND TARGET ggml-cpu)
     target_compile_options(ggml-cpu PRIVATE -U__ARM_FEATURE_FP16_VECTOR_ARITHMETIC)
+endif()
+
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/ggml_metal.cmake)
+
+# ggml finds default.metallib through the bundle of an Objective-C class, and
+# class names are process-wide: another ggml in the same host (a second plugin)
+# could win the name and point the lookup at its own bundle.
+if(MUSCRIPTOR_METAL_PRECOMPILED)
+    target_compile_definitions(ggml-metal PRIVATE GGMLMetalClass=MuscriptorGGMLMetalClass)
+
+    set(MUSCRIPTOR_GGML_METAL_DIR ${ggml_SOURCE_DIR}/src/ggml-metal)
+    get_directory_property(MUSCRIPTOR_METAL_LIBRARY_DIR
+        DIRECTORY ${MUSCRIPTOR_GGML_METAL_DIR} DEFINITION CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+    get_directory_property(MUSCRIPTOR_METAL_HAS_TENSOR_LIBRARY
+        DIRECTORY ${MUSCRIPTOR_GGML_METAL_DIR} DEFINITION GGML_METAL_HAS_TENSOR_LIB)
+
+    set(MUSCRIPTOR_METAL_LIBRARIES ${MUSCRIPTOR_METAL_LIBRARY_DIR}/default.metallib)
+
+    # The tensor API kernels, used on M5-class GPUs only. ggml builds them with
+    # the macOS 26 SDK or later; without them it runs its other kernels.
+    if(MUSCRIPTOR_METAL_HAS_TENSOR_LIBRARY)
+        list(APPEND MUSCRIPTOR_METAL_LIBRARIES ${MUSCRIPTOR_METAL_LIBRARY_DIR}/ggml-tensor.metallib)
+    else()
+        message(WARNING
+            "The Metal SDK is older than 26, so ggml-tensor.metallib is not built and M5-class GPUs "
+            "will not use the tensor API.")
+    endif()
+
+    set_property(GLOBAL PROPERTY MUSCRIPTOR_METAL_LIBRARIES ${MUSCRIPTOR_METAL_LIBRARIES})
 endif()
 
 # --- pffft --------------------------------------------------------------

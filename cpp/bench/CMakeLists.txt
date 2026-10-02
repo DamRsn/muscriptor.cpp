@@ -1,5 +1,6 @@
 add_executable(muscriptor_bench bench.cpp)
 target_link_libraries(muscriptor_bench PRIVATE muscriptor_ggml)
+muscriptor_add_metal_library(muscriptor_bench)
 # ../src for format.hpp, which the benchmark shares rather than restating. It is
 # private to the library and must not leak into cpp/include -- same reason the
 # tests reach in there.
