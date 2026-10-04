@@ -27,6 +27,8 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#elif defined(__linux__)
+#include "vulkan_loader_linux.hpp"
 #endif
 #endif
 
@@ -40,12 +42,15 @@ namespace
     /**
      * @return True when a Vulkan call is safe to make. On Windows
      *         `vulkan-1.dll` is delay-loaded and a missing loader would raise
-     *         a structured exception on the first call.
+     *         a structured exception on the first call. On Linux the loader is
+     *         opened at run time by vulkan_loader_linux.cpp.
      */
     bool vulkanLoaderPresent()
     {
 #if defined(_WIN32)
         return LoadLibraryW(L"vulkan-1.dll") != nullptr;
+#elif defined(__linux__)
+        return vulkanLoaderAvailable();
 #else
         return true;
 #endif
@@ -78,7 +83,7 @@ namespace
 
     /**
      * Each backend's own registry only: ggml's global one would load every
-     * backend, and on Windows that faults without `vulkan-1.dll`.
+     * backend, and without the Vulkan loader that faults on Windows and Linux.
      */
     Registry enumerate()
     {
