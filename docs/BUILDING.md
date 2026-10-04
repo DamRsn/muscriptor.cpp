@@ -167,13 +167,21 @@ The same set is used on every OS.
   same level, or a Debug link fails on `/failifmismatch`. The library builds
   with it and passes it to consumers through `muscriptor_ggml`. A consumer's
   own C++ static libraries that don't link `muscriptor_ggml` need it too.
-- **Run time.** The only dependency is the system loader, `vulkan-1.dll`.
+- **Run time.** The only dependency is the system loader, `vulkan-1.dll` on
+  Windows and `libvulkan.so.1` on Linux.
   - With MSVC and clang-cl it is delay-loaded, through INTERFACE link options
     that reach the consuming binary. The library checks it can load the DLL
     before its first Vulkan call, device enumeration included, and lists no
     Vulkan devices if it cannot.
   - MinGW links the loader directly, so a MinGW binary does not load at all
     without `vulkan-1.dll`.
+  - On Linux the binary does not link the loader. `ggml-vulkan`'s link to it is
+    dropped, and the few Vulkan functions ggml calls directly are defined in
+    `cpp/src/vulkan_loader_linux.cpp`, which opens `libvulkan.so.1` at run
+    time. Without the loader, or without a Vulkan driver, the library lists no
+    Vulkan devices. If a ggml update calls another Vulkan function directly,
+    executables (the tests, the benchmark) fail to link until it is added there.
+    A shared library only fails that way when linked with `-Wl,-z,defs`.
 - **The ggml registry.** ggml's global backend registry initialises Vulkan the
   first time it is used. On Windows, without `vulkan-1.dll`, that raises a
   delay-load exception that its C++ `catch` does not handle. The library never

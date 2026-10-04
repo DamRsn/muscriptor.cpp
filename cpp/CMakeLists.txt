@@ -330,6 +330,30 @@ if(MUSCRIPTOR_VULKAN)
             target_link_options(muscriptor_ggml INTERFACE -Wl,/DELAYLOAD:vulkan-1.dll)
         endif()
     endif()
+
+    # Linux has no delay-load: ggml-vulkan's link to libvulkan is dropped instead,
+    # and the few functions it calls directly come from vulkan_loader_linux.cpp,
+    # which opens the loader at run time. Hidden, so these definitions never
+    # interpose on a host's own Vulkan loader.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_library(muscriptor_vulkan_loader STATIC src/vulkan_loader_linux.cpp)
+        target_link_libraries(muscriptor_vulkan_loader PRIVATE Vulkan::Headers ${CMAKE_DL_LIBS})
+        set_target_properties(muscriptor_vulkan_loader PROPERTIES
+            POSITION_INDEPENDENT_CODE ON
+            CXX_VISIBILITY_PRESET hidden)
+
+        get_target_property(MUSCRIPTOR_VK_INTERFACE_LIBS ggml-vulkan INTERFACE_LINK_LIBRARIES)
+
+        if(NOT MUSCRIPTOR_VK_INTERFACE_LIBS MATCHES "Vulkan::Vulkan")
+            message(FATAL_ERROR
+                "ggml-vulkan no longer links the loader as Vulkan::Vulkan (${MUSCRIPTOR_VK_INTERFACE_LIBS}), "
+                "so it cannot be dropped and binaries would not load on a system without Vulkan.")
+        endif()
+
+        list(FILTER MUSCRIPTOR_VK_INTERFACE_LIBS EXCLUDE REGEX "Vulkan::Vulkan")
+        set_target_properties(ggml-vulkan PROPERTIES INTERFACE_LINK_LIBRARIES "${MUSCRIPTOR_VK_INTERFACE_LIBS}")
+        target_link_libraries(ggml-vulkan INTERFACE muscriptor_vulkan_loader)
+    endif()
 endif()
 
 set_target_properties(muscriptor_ggml PROPERTIES POSITION_INDEPENDENT_CODE ON)
