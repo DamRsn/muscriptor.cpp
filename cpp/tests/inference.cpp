@@ -266,6 +266,7 @@ const Transcription& transcription(const std::string& inVariant)
             update.new_notes.assign(inUpdate.new_notes.begin(), inUpdate.new_notes.end());
             update.finalized_through = inUpdate.finalized_through;
             update.progress = inUpdate.progress;
+            update.resume_point = inUpdate.resume_point;
             out->updates.push_back(std::move(update));
             return true;
         });

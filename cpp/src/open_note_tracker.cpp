@@ -24,6 +24,15 @@ void OpenNoteTracker::reset()
     mTieSet.clear();
 }
 
+void OpenNoteTracker::restore(std::vector<OpenNote> inOpen, double inSeekTime, bool inInPrologue)
+{
+    reset();
+    mOpen = std::move(inOpen);
+    mSeekTime = inSeekTime;
+    mInPrologue = inInPrologue;
+    mChunkStarted = true;
+}
+
 std::vector<NoteAction> OpenNoteTracker::_endAll(double inTime)
 {
     std::vector<NoteAction> actions;

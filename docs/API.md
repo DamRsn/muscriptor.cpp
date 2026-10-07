@@ -91,6 +91,7 @@ std::expected<std::vector<msl::Note>, msl::Error> notes =
 |---|---|---|
 | `instruments` | empty (all) | Restricts transcription to these groups. It adds a conditioning prefix and masks every other instrument's tokens, so no other instrument can appear. Set it before transcribing; it cannot be applied to a finished result. |
 | `prelude_forcing` | `true` | Feeds each chunk's still-sounding notes into the next chunk as a forced prompt ([`TOKENIZER.md`](TOKENIZER.md) § 4). |
+| `resume_from` | empty | Continues an earlier call from one of its `resume_point`s instead of starting over ([Resuming](#resuming)). |
 | `n_threads` | `0` | CPU threads. `0` selects the number of performance cores on macOS, and of logical CPUs elsewhere. On a GPU backend, only the conditioning front-end runs on the CPU and uses them. |
 
 ## Notes
@@ -140,6 +141,7 @@ struct TranscriptionUpdate {
     std::span<const Note> new_notes;
     double finalized_through;
     float progress;
+    std::string resume_point;
 };
 ```
 
@@ -157,6 +159,53 @@ struct TranscriptionUpdate {
   arrives in the final call.
 - **`progress`** runs from 0 to 1 and never decreases. The last two calls both
   report 1; `transcribe` returning is the end signal.
+- **`resume_point`** lets a later call continue from right after this update
+  ([Resuming](#resuming)). Empty in the final call.
+
+## Resuming
+
+A cancelled transcription can be continued later, in the same process or
+another one. Keep the notes reported so far and the latest `resume_point`, then
+call `transcribe` again with the same signal and options and
+`TranscribeOptions::resume_from` set to that point:
+
+- Decoding continues at the next chunk. The callbacks carry on exactly where
+  the first call left off: the same `new_notes`, `finalized_through`,
+  `progress` and `resume_point` an uninterrupted run would have reported.
+- The call returns only the notes not reported before the resume point. Those
+  plus the ones reported before are every `new_notes` of an uninterrupted run
+  joined, which is that run's result.
+- A point that is malformed, or that was made for another signal length,
+  instrument selection or `prelude_forcing`, returns
+  `Error::InvalidResumePoint` before anything is decoded.
+- The point does not record the checkpoint or the device. Resuming with another
+  checkpoint mixes two models' output. Resuming on another backend works, and
+  differs the way CPU and GPU results always do.
+
+The point holds only what the next chunk needs: the notes still sounding, and
+the notes that closed in the last decoded chunk, which are reported one chunk
+late. It is plain text, one record per line, with times in 10 ms frames so no
+floating-point value is written. Annotated (the annotations are not part of
+it):
+
+```
+muscriptor-resume 1
+samples 240000          signal length the point was made for
+prelude 1               prelude_forcing
+instruments 2 33 35     count, then the deduplicated selection, in order
+decoded 2               chunks done; decoding resumes at chunk 2
+prologue 0              1 if the last chunk never reached its tie token
+open 2                  notes still sounding, in the order they opened
+29 48 992               program pitch onset
+33 38 992
+withheld 3              notes closed in the last chunk, in close order
+n 29 46 491 515         note: program pitch onset offset
+d 38 515                drum hit: pitch onset (it always lasts 10 ms)
+n 33 34 491 515
+```
+
+Treat it as opaque: the format belongs to the library and changes with its
+version number.
 
 ## Cancellation
 
@@ -199,6 +248,7 @@ starts from a clean state.
 | `ContextOverflow` | A chunk's prefix plus its forced prompt does not fit in the KV cache |
 | `Cancelled` | A `should_cancel` predicate returned `true`, or the note callback returned `false` |
 | `InvalidArgument` | Unusable `TranscribeOptions`, e.g. an instrument outside the named groups |
+| `InvalidResumePoint` | `TranscribeOptions::resume_from` is malformed, or does not match this call's signal and options |
 | `Internal` | A bug in the library |
 
 ## Checkpoint format version

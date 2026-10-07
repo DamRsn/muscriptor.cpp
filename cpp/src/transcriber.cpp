@@ -5,10 +5,15 @@
 #include "instrument_groups.hpp"
 #include "note_assembler.hpp"
 #include "open_note_tracker.hpp"
+#include "resume_point.hpp"
 #include "vocabulary.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <new>
+#include <optional>
+#include <string>
+#include <string_view>
 
 namespace msl
 {
@@ -99,6 +104,19 @@ private:
     /** One chunk's samples, zero-padded to a full segment. */
     void _fillChunk(std::span<const float> inSamples, int inIndex);
 
+    /**
+     * Rebuild the decode state `inResumePoint` describes, after `_configure`.
+     * @return The chunk to continue from, or nothing if the point does not fit
+     *         this call.
+     */
+    std::optional<int> _restore(std::string_view inResumePoint,
+                                std::size_t inNSamples,
+                                const TranscribeOptions& inOptions,
+                                int inNChunks);
+
+    /** The resume point for right after chunk `inDecoded - 1`. */
+    std::string _resumePoint(std::size_t inNSamples, const TranscribeOptions& inOptions, int inDecoded) const;
+
     Model mModel;
     int mMelFrames;
 
@@ -133,6 +151,66 @@ bool Transcriber::Impl::_configure(const TranscribeOptions& inOptions)
     return true;
 }
 
+std::optional<int> Transcriber::Impl::_restore(std::string_view inResumePoint,
+                                               std::size_t inNSamples,
+                                               const TranscribeOptions& inOptions,
+                                               int inNChunks)
+{
+    std::optional<ResumeState> state = parseResumeState(inResumePoint);
+
+    if (!state || state->n_samples != inNSamples || state->prelude_forcing != inOptions.prelude_forcing
+        || state->instruments != mInstruments || state->decoded > inNChunks) {
+        return std::nullopt;
+    }
+
+    const int last = state->decoded - 1;
+
+    // Replayed through the same actions decoding produced, so the assembler
+    // ends up holding exactly what it held then.
+    for (const TrackedNote& tracked: state->withheld) {
+        const NoteKey& key = tracked.key;
+
+        if (tracked.drum_hit) {
+            mAssembler.apply(std::vector {NoteAction {NoteActionKind::DrumHit, 0, key.pitch, tracked.note.onset}},
+                             last);
+        } else {
+            mAssembler.apply(
+                std::vector {NoteAction {NoteActionKind::Start, key.program, key.pitch, tracked.note.onset},
+                             NoteAction {NoteActionKind::End, key.program, key.pitch, tracked.note.offset}},
+                last);
+        }
+    }
+
+    for (const OpenNoteTracker::OpenNote& note: state->open) {
+        mAssembler.apply(std::vector {NoteAction {NoteActionKind::Start, note.key.program, note.key.pitch, note.onset}},
+                         last);
+    }
+
+    mTracker.restore(std::move(state->open), last * SEGMENT_DURATION, state->in_prologue);
+
+    return state->decoded;
+}
+
+std::string
+    Transcriber::Impl::_resumePoint(std::size_t inNSamples, const TranscribeOptions& inOptions, int inDecoded) const
+{
+    ResumeState state;
+    state.n_samples = inNSamples;
+    state.prelude_forcing = inOptions.prelude_forcing;
+    state.instruments = mInstruments;
+    state.decoded = inDecoded;
+    state.in_prologue = mTracker.inPrologue();
+    state.open = mTracker.openNotes();
+
+    // Earlier chunks' notes have all been reported, and nothing later depends on them.
+    std::copy_if(mAssembler.closedNotes().begin(),
+                 mAssembler.closedNotes().end(),
+                 std::back_inserter(state.withheld),
+                 [inDecoded](const TrackedNote& n) { return n.chunk_index == inDecoded - 1; });
+
+    return serializeResumeState(state);
+}
+
 void Transcriber::Impl::_fillChunk(std::span<const float> inSamples, int inIndex)
 {
     mChunk.assign(static_cast<std::size_t>(SEGMENT_SAMPLES), 0.0f);
@@ -155,10 +233,22 @@ std::expected<std::vector<Note>, Error> Transcriber::Impl::transcribe(std::span<
         return std::unexpected(Error::InvalidArgument);
     }
 
-    const ScopedCancel scoped_cancel(mModel, inOptions.should_cancel);
     const int n_chunks = Transcriber::chunkCount(inSamples.size());
+    int first_chunk = 0;
 
-    for (int chunk = 0; chunk < n_chunks; ++chunk) {
+    if (!inOptions.resume_from.empty()) {
+        const std::optional<int> resumed = _restore(inOptions.resume_from, inSamples.size(), inOptions, n_chunks);
+
+        if (!resumed) {
+            return std::unexpected(Error::InvalidResumePoint);
+        }
+
+        first_chunk = *resumed;
+    }
+
+    const ScopedCancel scoped_cancel(mModel, inOptions.should_cancel);
+
+    for (int chunk = first_chunk; chunk < n_chunks; ++chunk) {
         if (inOptions.should_cancel && inOptions.should_cancel()) {
             return std::unexpected(Error::Cancelled);
         }
@@ -223,6 +313,7 @@ std::expected<std::vector<Note>, Error> Transcriber::Impl::transcribe(std::span<
             // closed only notes ending inside its own window.
             update.finalized_through = chunk * SEGMENT_DURATION;
             update.progress = static_cast<float>(chunk + 1) / static_cast<float>(n_chunks);
+            update.resume_point = _resumePoint(inSamples.size(), inOptions, chunk + 1);
 
             if (!inCallback(update)) {
                 return std::unexpected(Error::Cancelled);

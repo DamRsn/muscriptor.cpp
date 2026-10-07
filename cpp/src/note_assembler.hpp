@@ -17,6 +17,8 @@ struct TrackedNote {
     // Which chunk the note *closed* in, which is not necessarily where it began.
     int chunk_index = 0;
     NoteKey key;
+    // From a drum token rather than a start and an end.
+    bool drum_hit = false;
 };
 
 /**
@@ -55,6 +57,9 @@ public:
 
     /** Every note, cleaned over the whole list and globally sorted. */
     std::vector<Note> finalize() const;
+
+    /** Closed notes as `apply` recorded them, uncleaned, in close order. */
+    const std::vector<TrackedNote>& closedNotes() const { return mClosed; }
 
     void reset();
 

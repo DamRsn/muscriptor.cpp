@@ -27,6 +27,9 @@ enum class Error {
     // Something in `TranscribeOptions` is not usable, e.g. an instrument that is
     // not one of the named groups.
     InvalidArgument,
+    // `TranscribeOptions::resume_from` is malformed, or was made for another
+    // signal, instrument selection or prelude setting.
+    InvalidResumePoint,
     // A bug in the library, not a problem with the input.
     Internal,
 };

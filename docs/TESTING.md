@@ -103,7 +103,7 @@ first stage that went wrong.
 | `test_tokens_to_notes.cpp` | `[tokens-to-notes]` | The reference's token streams replayed to notes, for every variant |
 | `test_prelude.cpp` | `[prelude]` | Forced prompts; prelude-forced decoding step by step `[slow]` |
 | `test_instrument_conditioning.cpp` | `[instruments]` | Conditioning rows, prefix length and order, forbidden-token mask; conditioned decoding `[slow]` |
-| `test_transcriber.cpp` | `[transcriber]` | The public API: errors, cancellation, streaming, and note lists matching the reference `[slow]` |
+| `test_transcriber.cpp` | `[transcriber]` | The public API: errors, cancellation, streaming, resuming, and note lists matching the reference `[slow]` |
 
 `[pure]` tests need no weights. `[tokens-to-notes]` tests need only
 `notes.json`. Tests also carry narrower tags such as `[layer0]` and `[tracker]`;

@@ -48,6 +48,12 @@ struct NoteAction {
 class OpenNoteTracker
 {
 public:
+    /** An open note, and when it started. */
+    struct OpenNote {
+        NoteKey key;
+        double onset = 0.0;
+    };
+
     /**
      * Start a new chunk.
      *
@@ -66,15 +72,22 @@ public:
     /** Still-sounding notes, sorted by (program, pitch). */
     std::vector<NoteKey> openKeys() const;
 
+    /** Still-sounding notes, in the order they opened. */
+    const std::vector<OpenNote>& openNotes() const { return mOpen; }
+
+    /** Whether the current chunk has not reached its `tie` token yet. */
+    bool inPrologue() const { return mInPrologue; }
+
+    /**
+     * Put the tracker where it was right after decoding the chunk starting at
+     * `inSeekTime`: `inOpen` sounding, and that chunk still in its prologue if
+     * `inInPrologue`. The next call must be `feed(ChunkBoundary)` or `finish()`.
+     */
+    void restore(std::vector<OpenNote> inOpen, double inSeekTime, bool inInPrologue);
+
     void reset();
 
 private:
-    /** An open note, and when it started. */
-    struct OpenNote {
-        NoteKey key;
-        double onset = 0.0;
-    };
-
     std::vector<NoteAction> _endAll(double inTime);
     std::vector<NoteAction> _feedPrologue(const TokenEvent& inEvent);
     std::vector<NoteAction> _feedBody(const TokenEvent& inEvent);

@@ -93,6 +93,7 @@ struct RecordedUpdate {
     std::vector<Note> new_notes;
     double finalized_through = 0.0;
     float progress = 0.0f;
+    std::string resume_point;
 };
 
 struct Transcription {
