@@ -529,7 +529,7 @@ Model Model::load(const std::filesystem::path& inGgufPath, Options inOptions)
     if (version != CHECKPOINT_FORMAT_VERSION) {
         throw Exception(Error::UnsupportedCheckpointVersion,
                         msl::format("{} is checkpoint format version {}; this build reads {}",
-                                    inGgufPath.filename().string(),
+                                    utf8(inGgufPath.filename()),
                                     version,
                                     CHECKPOINT_FORMAT_VERSION));
     }

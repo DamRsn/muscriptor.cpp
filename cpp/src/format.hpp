@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <filesystem>
 #include <locale>
 #include <sstream>
 #include <string>
@@ -79,6 +80,17 @@ std::string format(std::string_view inFormat, const Args&... inArgs)
     while (detail::nextPlaceholder(out, rest)) {}
 
     return out.str();
+}
+
+/**
+ * `inPath` as UTF-8, the encoding ggml decodes a `char*` path with on Windows.
+ * `path::string()` gives the active code page there instead, and throws for a
+ * character that page cannot represent.
+ */
+inline std::string utf8(const std::filesystem::path& inPath)
+{
+    const std::u8string text = inPath.u8string();
+    return {text.begin(), text.end()};
 }
 
 } // namespace msl
