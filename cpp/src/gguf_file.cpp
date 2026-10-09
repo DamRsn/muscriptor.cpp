@@ -58,22 +58,17 @@ GgufFile::GgufFile(const std::filesystem::path& inPath, ggml_backend_t inBackend
     std::error_code ec;
 
     if (!std::filesystem::is_regular_file(inPath, ec)) {
-        throw Exception(Error::FileNotFound, msl::format("checkpoint not found: {}", inPath.string()));
+        throw Exception(Error::FileNotFound, msl::format("checkpoint not found: {}", utf8(inPath)));
     }
 
     gguf_init_params params {};
     params.no_alloc = true;
     params.ctx = &mCtx;
 
-    // path::c_str() is wchar_t on Windows, and ggml takes char*. string() is the
-    // narrow encoding ggml's own fopen uses, so the two agree on which file
-    // this is.
-    const std::string path = inPath.string();
-
-    mGguf = gguf_init_from_file(path.c_str(), params);
+    mGguf = gguf_init_from_file(utf8(inPath).c_str(), params);
 
     if (mGguf == nullptr) {
-        throw Exception(Error::InvalidCheckpoint, msl::format("not a readable GGUF file: {}", inPath.string()));
+        throw Exception(Error::InvalidCheckpoint, msl::format("not a readable GGUF file: {}", utf8(inPath)));
     }
 
     // A throwing constructor never runs the destructor, so free what is held.
@@ -81,13 +76,13 @@ GgufFile::GgufFile(const std::filesystem::path& inPath, ggml_backend_t inBackend
         mBuffer = ggml_backend_alloc_ctx_tensors(mCtx, inBackend);
 
         if (mBuffer == nullptr) {
-            throw Exception(Error::OutOfMemory, msl::format("failed to allocate tensors for: {}", inPath.string()));
+            throw Exception(Error::OutOfMemory, msl::format("failed to allocate tensors for: {}", utf8(inPath)));
         }
 
         std::ifstream file(inPath, std::ios::binary);
 
         if (!file) {
-            throw Exception(Error::FileNotFound, msl::format("failed to reopen GGUF file: {}", inPath.string()));
+            throw Exception(Error::FileNotFound, msl::format("failed to reopen GGUF file: {}", utf8(inPath)));
         }
 
         const std::int64_t n_tensors = gguf_get_n_tensors(mGguf);
@@ -155,7 +150,7 @@ ggml_tensor* GgufFile::get(const std::string& inName) const
 
     if (tensor == nullptr) {
         throw Exception(Error::InvalidCheckpoint,
-                        msl::format("tensor '{}' not found in {}", inName, mPath.filename().string()));
+                        msl::format("tensor '{}' not found in {}", inName, utf8(mPath.filename())));
     }
 
     return tensor;
@@ -175,7 +170,7 @@ namespace
 
         if (id < 0) {
             throw Exception(Error::InvalidCheckpoint,
-                            msl::format("metadata key '{}' not found in {}", inKey, inPath.filename().string()));
+                            msl::format("metadata key '{}' not found in {}", inKey, utf8(inPath.filename())));
         }
 
         return id;
