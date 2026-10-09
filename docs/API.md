@@ -182,28 +182,6 @@ call `transcribe` again with the same signal and options and
   checkpoint mixes two models' output. Resuming on another backend works, and
   differs the way CPU and GPU results always do.
 
-The point holds only what the next chunk needs: the notes still sounding, and
-the notes that closed in the last decoded chunk, which are reported one chunk
-late. It is plain text, one record per line, with times in 10 ms frames so no
-floating-point value is written. Annotated (the annotations are not part of
-it):
-
-```
-muscriptor-resume 1
-samples 240000          signal length the point was made for
-prelude 1               prelude_forcing
-instruments 2 33 35     count, then the deduplicated selection, in order
-decoded 2               chunks done; decoding resumes at chunk 2
-prologue 0              1 if the last chunk never reached its tie token
-open 2                  notes still sounding, in the order they opened
-29 48 992               program pitch onset
-33 38 992
-withheld 3              notes closed in the last chunk, in close order
-n 29 46 491 515         note: program pitch onset offset
-d 38 515                drum hit: pitch onset (it always lasts 10 ms)
-n 33 34 491 515
-```
-
 Treat it as opaque: the format belongs to the library and changes with its
 version number.
 
@@ -248,8 +226,8 @@ starts from a clean state.
 | `ContextOverflow` | A chunk's prefix plus its forced prompt does not fit in the KV cache |
 | `Cancelled` | A `should_cancel` predicate returned `true`, or the note callback returned `false` |
 | `InvalidArgument` | Unusable `TranscribeOptions`, e.g. an instrument outside the named groups |
-| `InvalidResumePoint` | `TranscribeOptions::resume_from` is malformed, or does not match this call's signal and options |
 | `Internal` | A bug in the library |
+| `InvalidResumePoint` | `TranscribeOptions::resume_from` is malformed, or does not match this call's signal and options |
 
 ## Checkpoint format version
 

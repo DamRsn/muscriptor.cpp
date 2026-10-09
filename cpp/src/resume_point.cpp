@@ -188,7 +188,6 @@ std::optional<ResumeState> parseResumeState(std::string_view inText)
         const std::string_view kind = in.word();
 
         TrackedNote tracked;
-        tracked.chunk_index = state.decoded - 1;
 
         if (kind == "d") {
             tracked.drum_hit = true;

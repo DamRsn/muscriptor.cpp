@@ -24,10 +24,10 @@ const char* describe(Error inError)
             return "cancelled by the caller";
         case Error::InvalidArgument:
             return "invalid transcribe options";
-        case Error::InvalidResumePoint:
-            return "the resume point does not match this transcription";
         case Error::Internal:
             return "internal error";
+        case Error::InvalidResumePoint:
+            return "the resume point does not match this transcription";
     }
 
     return "unknown error";

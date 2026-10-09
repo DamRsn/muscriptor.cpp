@@ -16,7 +16,24 @@ namespace msl
 
 /**
  * Everything `transcribe` carries from one chunk to the next, plus what the
- * resumed call has to match. docs/API.md, "Resuming", has the string format.
+ * resumed call has to match.
+ *
+ * Serialised as whitespace-separated text, times in whole 10 ms frames:
+ *
+ *     muscriptor-resume 1
+ *     samples 240000          signal length
+ *     prelude 1               prelude_forcing
+ *     instruments 2 33 35     count, then the selection
+ *     decoded 2               chunks done
+ *     prologue 0              1 if the last chunk never reached its tie token
+ *     open 2                  count, then: program pitch onset
+ *     29 48 992
+ *     33 38 992
+ *     withheld 2              count, then: n program pitch onset offset
+ *     n 29 46 491 515                           or d pitch onset (drum hit)
+ *     d 38 515
+ *
+ * (The right-hand annotations are not part of it.)
  */
 struct ResumeState {
     std::size_t n_samples = 0;
