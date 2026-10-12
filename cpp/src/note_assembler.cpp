@@ -183,7 +183,7 @@ void NoteAssembler::apply(std::span<const NoteAction> inActions, int inChunkInde
                 note.program = DRUM_PROGRAM;
                 note.is_drum = true;
 
-                mClosed.push_back({note, inChunkIndex, {DRUM_PROGRAM, action.pitch}});
+                mClosed.push_back({note, inChunkIndex, {DRUM_PROGRAM, action.pitch}, true});
                 break;
             }
         }

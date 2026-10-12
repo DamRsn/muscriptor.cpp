@@ -26,6 +26,8 @@ const char* describe(Error inError)
             return "invalid transcribe options";
         case Error::Internal:
             return "internal error";
+        case Error::InvalidResumePoint:
+            return "the resume point does not match this transcription";
     }
 
     return "unknown error";

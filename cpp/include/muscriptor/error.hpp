@@ -29,6 +29,9 @@ enum class Error {
     InvalidArgument,
     // A bug in the library, not a problem with the input.
     Internal,
+    // `TranscribeOptions::resume_from` is malformed, or was made for another
+    // signal, instrument selection or prelude setting.
+    InvalidResumePoint,
 };
 
 /** @return A short, stable description of `inError`, for logs. */

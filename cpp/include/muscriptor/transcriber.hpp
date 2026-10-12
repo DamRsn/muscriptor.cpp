@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace msl
@@ -51,6 +52,14 @@ struct TranscribeOptions {
      * longest stretch between two polls on each backend.
      */
     CancelPredicate should_cancel;
+
+    /**
+     * A `TranscriptionUpdate::resume_point` from an earlier call on the same
+     * signal with the same options. Empty: start from the beginning. Otherwise
+     * decoding continues after that update, and only the notes it had not
+     * reported yet are returned. See docs/API.md, "Resuming".
+     */
+    std::string resume_from;
 };
 
 /** Options fixed at load: they decide where the weights and KV cache live. */
@@ -112,6 +121,12 @@ struct TranscriptionUpdate {
      * calls both report 1; `transcribe` returning is the end signal.
      */
     float progress = 0.0f;
+
+    /**
+     * Pass as `TranscribeOptions::resume_from` to continue right after this
+     * update, in this process or a later one. Empty in the final call.
+     */
+    std::string resume_point;
 };
 
 /**

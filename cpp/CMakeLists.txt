@@ -287,6 +287,7 @@ add_library(muscriptor_ggml STATIC
     src/log.cpp
     src/note_assembler.cpp
     src/open_note_tracker.cpp
+    src/resume_point.cpp
     src/trace.cpp
     src/transcriber.cpp
     src/model.cpp

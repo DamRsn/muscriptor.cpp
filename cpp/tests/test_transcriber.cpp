@@ -98,6 +98,56 @@ void requireReferenceNotes(const std::string& inVariant)
                      variant.notes.size()));
 }
 
+/**
+ * Resumes `inVariant`'s recorded run after each of its chunks and requires the
+ * rest to come out exactly as it did the first time: the same updates, and the
+ * notes reported before the resume point plus the resumed result giving the
+ * same list.
+ */
+void requireResumingReproduces(const std::string& inVariant)
+{
+    const Transcription& run = transcription(inVariant);
+    REQUIRE(run.notes.has_value());
+    REQUIRE(run.updates.size() >= 2);
+
+    // The final update carries no resume point; every other one does.
+    CHECK(run.updates.back().resume_point.empty());
+
+    for (std::size_t paused_at = 0; paused_at + 1 < run.updates.size(); ++paused_at) {
+        INFO("resuming after update " << paused_at);
+        REQUIRE_FALSE(run.updates[paused_at].resume_point.empty());
+
+        std::vector<Note> notes;
+
+        for (std::size_t i = 0; i <= paused_at; ++i) {
+            notes.insert(notes.end(), run.updates[i].new_notes.begin(), run.updates[i].new_notes.end());
+        }
+
+        TranscribeOptions options = run.options;
+        options.resume_from = run.updates[paused_at].resume_point;
+        std::size_t next = paused_at + 1;
+
+        const std::expected<std::vector<Note>, Error> resumed =
+            sharedTranscriber().transcribe(fixtureSignal(), options, [&](const TranscriptionUpdate& inUpdate) {
+                REQUIRE(next < run.updates.size());
+                const RecordedUpdate& want = run.updates[next++];
+
+                requireSameNotes({inUpdate.new_notes.begin(), inUpdate.new_notes.end()}, want.new_notes);
+                CHECK(inUpdate.finalized_through == want.finalized_through);
+                CHECK(inUpdate.progress == want.progress);
+                CHECK(inUpdate.resume_point == want.resume_point);
+                return true;
+            });
+
+        REQUIRE(resumed.has_value());
+        CHECK(next == run.updates.size());
+
+        notes.insert(notes.end(), resumed->begin(), resumed->end());
+        sortNotes(notes);
+        requireSameNotes(notes, *run.notes);
+    }
+}
+
 } // namespace
 
 TEST_CASE("chunking matches the reference's ceil division", "[transcriber]")
@@ -182,6 +232,59 @@ TEST_CASE("returning false from the callback cancels", "[transcriber]")
     const std::expected<std::vector<Note>, Error> again = sharedTranscriber().transcribe({});
     REQUIRE(again.has_value());
     CHECK(again->empty());
+}
+
+TEST_CASE("a resume point only fits the call it came from", "[transcriber]")
+{
+    const std::vector<float> silence(2 * Transcriber::SEGMENT_SAMPLES, 0.0f);
+    std::string resume_point;
+
+    const std::expected<std::vector<Note>, Error> first =
+        sharedTranscriber().transcribe(silence, {}, [&](const TranscriptionUpdate& inUpdate) {
+            resume_point = inUpdate.resume_point;
+            return false;
+        });
+
+    REQUIRE_FALSE(first.has_value());
+    REQUIRE_FALSE(resume_point.empty());
+
+    const auto resume = [&](std::span<const float> inSignal, TranscribeOptions inOptions) {
+        inOptions.resume_from = resume_point;
+        return sharedTranscriber().transcribe(inSignal, inOptions);
+    };
+
+    CHECK(resume(silence, {}).has_value());
+
+    const std::vector<float> longer(3 * Transcriber::SEGMENT_SAMPLES, 0.0f);
+    CHECK(resume(longer, {}).error() == Error::InvalidResumePoint);
+
+    TranscribeOptions unforced;
+    unforced.prelude_forcing = false;
+    CHECK(resume(silence, unforced).error() == Error::InvalidResumePoint);
+
+    TranscribeOptions drums;
+    drums.instruments = {InstrumentGroup::Drums};
+    CHECK(resume(silence, drums).error() == Error::InvalidResumePoint);
+
+    for (const std::string& bad:
+         {std::string("garbage"), resume_point.substr(0, resume_point.size() / 2), resume_point + " 1"}) {
+        INFO("resume point: " << bad);
+        TranscribeOptions options;
+        options.resume_from = bad;
+        CHECK(sharedTranscriber().transcribe(silence, options).error() == Error::InvalidResumePoint);
+    }
+}
+
+TEST_CASE("resuming after any chunk reproduces the uninterrupted run", "[transcriber][slow]")
+{
+    SECTION("prelude forcing")
+    {
+        requireResumingReproduces("prelude");
+    }
+    SECTION("instrument selection")
+    {
+        requireResumingReproduces("band");
+    }
 }
 
 TEST_CASE("the default transcription reproduces the reference notes", "[transcriber][slow]")
