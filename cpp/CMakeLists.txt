@@ -60,13 +60,6 @@ set(GGML_BLAS        OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP      OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP      OFF)
 
-# GGML_NATIVE compiles for the build machine, and the result can fault on older
-# CPUs, so it is off unless MUSCRIPTOR_NATIVE. It must also be off for the x86_64
-# slice on an Apple Silicon host, where CMAKE_CROSSCOMPILING is false.
-option(MUSCRIPTOR_NATIVE "Optimize for the build machine's CPU. Never for a shipped build" OFF)
-set(GGML_NATIVE      ${MUSCRIPTOR_NATIVE} CACHE BOOL "" FORCE)
-set(GGML_NATIVE      ${MUSCRIPTOR_NATIVE})
-
 # x86-64 as ggml's ggml_get_system_arch decides it, 64-bit only. The CPU
 # variants check that the two agree.
 if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64"
@@ -80,18 +73,26 @@ endif()
 
 # One ggml-cpu per x86-64 instruction-set level, chosen at run time
 # (cmake/ggml_cpu_variants.cmake, docs/BUILDING.md#cpu-variants).
-if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND MUSCRIPTOR_X86_64)
-    set(MUSCRIPTOR_CPU_VARIANTS_DEFAULT ON)
-else()
-    set(MUSCRIPTOR_CPU_VARIANTS_DEFAULT OFF)
-endif()
-
-option(MUSCRIPTOR_CPU_VARIANTS "Build ggml-cpu for several x86-64 levels and pick one at run time"
-    ${MUSCRIPTOR_CPU_VARIANTS_DEFAULT})
+option(MUSCRIPTOR_CPU_VARIANTS "Build ggml-cpu for several x86-64 levels and pick one at run time" OFF)
 
 if(MUSCRIPTOR_CPU_VARIANTS AND NOT MUSCRIPTOR_X86_64)
     message(FATAL_ERROR "MUSCRIPTOR_CPU_VARIANTS is for x86-64 targets only.")
 endif()
+
+# GGML_NATIVE compiles for the build machine, and the result can fault on older
+# CPUs. Off by default when the target is not the build machine: the x86_64
+# slice on an Apple Silicon host is one, and there CMAKE_CROSSCOMPILING is false.
+if(MUSCRIPTOR_CPU_VARIANTS OR CMAKE_CROSSCOMPILING
+        OR (CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_OSX_ARCHITECTURES STREQUAL CMAKE_HOST_SYSTEM_PROCESSOR))
+    set(MUSCRIPTOR_NATIVE_DEFAULT OFF)
+else()
+    set(MUSCRIPTOR_NATIVE_DEFAULT ON)
+endif()
+
+option(MUSCRIPTOR_NATIVE "Optimize for the build machine's CPU. Never for a shipped build"
+    ${MUSCRIPTOR_NATIVE_DEFAULT})
+set(GGML_NATIVE      ${MUSCRIPTOR_NATIVE} CACHE BOOL "" FORCE)
+set(GGML_NATIVE      ${MUSCRIPTOR_NATIVE})
 
 if(MUSCRIPTOR_CPU_VARIANTS AND MUSCRIPTOR_NATIVE)
     message(FATAL_ERROR "MUSCRIPTOR_CPU_VARIANTS and MUSCRIPTOR_NATIVE are exclusive: the variants set their own "
@@ -99,8 +100,11 @@ if(MUSCRIPTOR_CPU_VARIANTS AND MUSCRIPTOR_NATIVE)
 endif()
 
 # x86 instruction sets for ggml-cpu. Normal variable as well as cache (CMP0077),
-# and checked after the fetch. Ignored on ARM.
-if(MUSCRIPTOR_CPU_VARIANTS)
+# and checked after the fetch. Ignored on ARM, and left to ggml when native.
+if(MUSCRIPTOR_NATIVE)
+    set(MUSCRIPTOR_X86_FEATURES_ON)
+    set(MUSCRIPTOR_X86_FEATURES_OFF)
+elseif(MUSCRIPTOR_CPU_VARIANTS)
     # None: the variants add their own on top of ggml-cpu's compile flags.
     set(MUSCRIPTOR_X86_FEATURES_ON)
     set(MUSCRIPTOR_X86_FEATURES_OFF GGML_SSE42 GGML_AVX GGML_F16C GGML_AVX2 GGML_BMI2 GGML_FMA GGML_AVX_VNNI
@@ -259,7 +263,7 @@ endforeach()
 
 # And for the x86 instruction set, read from the compile line. No match on ARM.
 # The CPU variants check their own (cmake/ggml_cpu_variants.cmake).
-if(TARGET ggml-cpu AND NOT MUSCRIPTOR_CPU_VARIANTS)
+if(TARGET ggml-cpu AND NOT MUSCRIPTOR_CPU_VARIANTS AND NOT MUSCRIPTOR_NATIVE)
     get_target_property(MUSCRIPTOR_CPU_FLAGS ggml-cpu COMPILE_OPTIONS)
 
     if(MUSCRIPTOR_CPU_FLAGS MATCHES "-mavx2|-mfma|-mbmi2|-mavx512|/arch:AVX2|/arch:AVX512")

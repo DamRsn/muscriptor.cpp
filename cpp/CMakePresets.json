@@ -3,13 +3,14 @@
   "configurePresets": [
     {
       "name": "parity",
-      "displayName": "Parity (default): fp32 accumulation on ARM",
+      "displayName": "Parity (default): fp32 accumulation on ARM, no native tuning",
       "description": "The build the CPU test tolerances assume. What ships.",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
-        "MUSCRIPTOR_GGML_FP32_ACCUM": "ON"
+        "MUSCRIPTOR_GGML_FP32_ACCUM": "ON",
+        "MUSCRIPTOR_NATIVE": "OFF"
       }
     },
     {
@@ -41,6 +42,16 @@
       "cacheVariables": {
         "CMAKE_OSX_ARCHITECTURES": "x86_64"
       }
+    },
+    {
+      "name": "windows-x64",
+      "displayName": "Windows x64",
+      "description": "CPU variants, as shipped. Needs clang-cl: set CC and CXX to clang-cl.",
+      "inherits": "parity",
+      "binaryDir": "${sourceDir}/build-windows-x64",
+      "cacheVariables": {
+        "MUSCRIPTOR_CPU_VARIANTS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -59,6 +70,10 @@
     {
       "name": "macos-x86_64",
       "configurePreset": "macos-x86_64"
+    },
+    {
+      "name": "windows-x64",
+      "configurePreset": "windows-x64"
     }
   ]
 }

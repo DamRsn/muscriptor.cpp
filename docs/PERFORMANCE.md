@@ -3,7 +3,8 @@
 ## Throughput
 
 Numbers from `muscriptor_bench` on an Apple M1 Pro (8 performance + 2
-efficiency cores), using the default portable build. Each configuration was run
+efficiency cores), built as it ships (the `parity` preset, without native
+tuning). Each configuration was run
 once on an idle machine. All runs transcribe the 15 s test fixture with the
 default options, including prelude forcing.
 
