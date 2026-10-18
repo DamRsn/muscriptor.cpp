@@ -67,15 +67,57 @@ option(MUSCRIPTOR_NATIVE "Optimize for the build machine's CPU. Never for a ship
 set(GGML_NATIVE      ${MUSCRIPTOR_NATIVE} CACHE BOOL "" FORCE)
 set(GGML_NATIVE      ${MUSCRIPTOR_NATIVE})
 
-# x86 baseline: Ivy Bridge, the oldest CPU in a Mac that boots macOS 11. With
-# native off, ggml would otherwise enable AVX2, BMI2 and FMA too. Normal variable
-# as well as cache (CMP0077), and checked after the fetch. Ignored on ARM.
-foreach(MUSCRIPTOR_X86_FEATURE GGML_SSE42 GGML_AVX GGML_F16C)
+# x86-64 as ggml's ggml_get_system_arch decides it, 64-bit only. The CPU
+# variants check that the two agree.
+if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64"
+        OR (NOT CMAKE_OSX_ARCHITECTURES AND CMAKE_GENERATOR_PLATFORM MATCHES "^(x64|X64|x86_64|amd64|AMD64)$")
+        OR (NOT CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_GENERATOR_PLATFORM
+            AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")))
+    set(MUSCRIPTOR_X86_64 ON)
+else()
+    set(MUSCRIPTOR_X86_64 OFF)
+endif()
+
+# One ggml-cpu per x86-64 instruction-set level, chosen at run time
+# (cmake/ggml_cpu_variants.cmake, docs/BUILDING.md#cpu-variants).
+if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND MUSCRIPTOR_X86_64)
+    set(MUSCRIPTOR_CPU_VARIANTS_DEFAULT ON)
+else()
+    set(MUSCRIPTOR_CPU_VARIANTS_DEFAULT OFF)
+endif()
+
+option(MUSCRIPTOR_CPU_VARIANTS "Build ggml-cpu for several x86-64 levels and pick one at run time"
+    ${MUSCRIPTOR_CPU_VARIANTS_DEFAULT})
+
+if(MUSCRIPTOR_CPU_VARIANTS AND NOT MUSCRIPTOR_X86_64)
+    message(FATAL_ERROR "MUSCRIPTOR_CPU_VARIANTS is for x86-64 targets only.")
+endif()
+
+if(MUSCRIPTOR_CPU_VARIANTS AND MUSCRIPTOR_NATIVE)
+    message(FATAL_ERROR "MUSCRIPTOR_CPU_VARIANTS and MUSCRIPTOR_NATIVE are exclusive: the variants set their own "
+                        "instruction sets. Turn one of them off.")
+endif()
+
+# x86 instruction sets for ggml-cpu. Normal variable as well as cache (CMP0077),
+# and checked after the fetch. Ignored on ARM.
+if(MUSCRIPTOR_CPU_VARIANTS)
+    # None: the variants add their own on top of ggml-cpu's compile flags.
+    set(MUSCRIPTOR_X86_FEATURES_ON)
+    set(MUSCRIPTOR_X86_FEATURES_OFF GGML_SSE42 GGML_AVX GGML_F16C GGML_AVX2 GGML_BMI2 GGML_FMA GGML_AVX_VNNI
+        GGML_AVX512 GGML_AVX512_VBMI GGML_AVX512_VNNI GGML_AVX512_BF16 GGML_AMX_TILE GGML_AMX_INT8 GGML_AMX_BF16)
+else()
+    # Ivy Bridge, the oldest CPU in a Mac that boots macOS 11. With native off,
+    # ggml would otherwise enable AVX2, BMI2 and FMA too.
+    set(MUSCRIPTOR_X86_FEATURES_ON GGML_SSE42 GGML_AVX GGML_F16C)
+    set(MUSCRIPTOR_X86_FEATURES_OFF GGML_AVX2 GGML_BMI2 GGML_FMA)
+endif()
+
+foreach(MUSCRIPTOR_X86_FEATURE ${MUSCRIPTOR_X86_FEATURES_ON})
     set(${MUSCRIPTOR_X86_FEATURE} ON CACHE BOOL "" FORCE)
     set(${MUSCRIPTOR_X86_FEATURE} ON)
 endforeach()
 
-foreach(MUSCRIPTOR_X86_FEATURE GGML_AVX2 GGML_BMI2 GGML_FMA)
+foreach(MUSCRIPTOR_X86_FEATURE ${MUSCRIPTOR_X86_FEATURES_OFF})
     set(${MUSCRIPTOR_X86_FEATURE} OFF CACHE BOOL "" FORCE)
     set(${MUSCRIPTOR_X86_FEATURE} OFF)
 endforeach()
@@ -216,10 +258,11 @@ foreach(MUSCRIPTOR_OMP_TARGET ggml-base ggml-cpu)
 endforeach()
 
 # And for the x86 instruction set, read from the compile line. No match on ARM.
-if(TARGET ggml-cpu)
+# The CPU variants check their own (cmake/ggml_cpu_variants.cmake).
+if(TARGET ggml-cpu AND NOT MUSCRIPTOR_CPU_VARIANTS)
     get_target_property(MUSCRIPTOR_CPU_FLAGS ggml-cpu COMPILE_OPTIONS)
 
-    if(MUSCRIPTOR_CPU_FLAGS MATCHES "-mavx2|-mfma|-mbmi2")
+    if(MUSCRIPTOR_CPU_FLAGS MATCHES "-mavx2|-mfma|-mbmi2|-mavx512|/arch:AVX2|/arch:AVX512")
         message(FATAL_ERROR
             "ggml-cpu compiles with ${MUSCRIPTOR_CPU_FLAGS}. The x86_64 build targets Ivy Bridge, the "
             "oldest CPU in a Mac that boots macOS 11, and AVX2, BMI2 and FMA all fault there.")
@@ -338,6 +381,12 @@ set_target_properties(muscriptor_ggml PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # The public headers need C++23 (std::expected); CMAKE_CXX_STANDARD alone does
 # not reach a consumer's targets.
 target_compile_features(muscriptor_ggml PUBLIC cxx_std_23)
+
+# After every library target exists: it checks their compile flags.
+if(MUSCRIPTOR_CPU_VARIANTS)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/ggml_cpu_variants.cmake)
+    target_compile_definitions(muscriptor_ggml PRIVATE MUSCRIPTOR_CPU_DISPATCH)
+endif()
 
 # --- tests --------------------------------------------------------------
 #

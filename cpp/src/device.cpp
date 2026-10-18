@@ -1,6 +1,7 @@
 #include "muscriptor/device.hpp"
 #include "muscriptor/error.hpp"
 
+#include "cpu_dispatch.hpp"
 #include "device_backend.hpp"
 #include "log.hpp"
 
@@ -171,8 +172,24 @@ std::size_t autoDevice(std::span<const Device> inDevices)
     return discrete != inDevices.end() ? static_cast<std::size_t>(discrete - inDevices.begin()) : 0;
 }
 
+std::string_view cpuVariant()
+{
+#if defined(MUSCRIPTOR_CPU_DISPATCH)
+    return cpuDispatch().tag;
+#else
+    return "default";
+#endif
+}
+
 InitialisedBackend initBackend(std::optional<std::size_t> inDevice)
 {
+#if defined(MUSCRIPTOR_CPU_DISPATCH)
+    // Every model needs a CPU backend, for the conditioning front-end at least.
+    if (const CpuDispatch& cpu = cpuDispatch(); cpu.tag.empty()) {
+        throw Exception(Error::UnsupportedCpu, cpu.reason);
+    }
+
+#endif
     const Registry& reg = registry();
     const std::size_t cpu = reg.devices.size() - 1;
 

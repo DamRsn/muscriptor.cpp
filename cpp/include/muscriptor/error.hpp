@@ -32,6 +32,9 @@ enum class Error {
     // `TranscribeOptions::resume_from` is malformed, or was made for another
     // signal, instrument selection or prelude setting.
     InvalidResumePoint,
+    // The CPU lacks the instruction set of every CPU-backend variant this build
+    // has, or of the one `MUSCRIPTOR_CPU_VARIANT` names (`cpuVariant`).
+    UnsupportedCpu,
 };
 
 /** @return A short, stable description of `inError`, for logs. */

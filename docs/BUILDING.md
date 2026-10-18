@@ -17,6 +17,7 @@ To build against a local ggml checkout instead, add
 | Option | Default | Effect |
 |---|---|---|
 | `MUSCRIPTOR_GGML_FP32_ACCUM` | `ON` | On ARM, `ggml-cpu` sums F16 matmuls in fp32 instead of fp16. See below. |
+| `MUSCRIPTOR_CPU_VARIANTS` | `ON` for Windows x64 with clang-cl | Builds `ggml-cpu` once per x86-64 level and picks one at run time ([CPU variants](#cpu-variants)). |
 | `MUSCRIPTOR_NATIVE` | `OFF` | Tunes the build for the machine it is compiled on (ggml's `GGML_NATIVE`). For local benchmarking only: the binary may crash on other CPUs. |
 | `MUSCRIPTOR_METAL` | `ON` on Apple | Builds the Metal backend. |
 | `MUSCRIPTOR_METAL_PRECOMPILED` | `ON` with Metal | Compiles the Metal shaders into `.metallib` files at build time, which the executable ships. `OFF` embeds the shader source and compiles it at run time ([Metal](#metal)). |
@@ -144,12 +145,65 @@ renames ggml's `GGMLMetalClass`, the Objective-C class whose bundle ggml
 searches. Class names are shared across a process, so another copy of ggml in
 the same host could otherwise point the search at its own bundle.
 
-## x86 baseline
+## x86 instruction sets
 
-x86 builds target Ivy Bridge: SSE4.2, AVX and F16C on; AVX2, FMA and BMI2 off.
-These are pinned, and configuring fails if AVX2, FMA or BMI2 reach ggml's
-compile flags; ggml would otherwise enable all six when native tuning is off.
-The same set is used on every OS.
+### CPU variants
+
+With `MUSCRIPTOR_CPU_VARIANTS`, `ggml-cpu` is built three times, and the best
+build the CPU can run is chosen when the process first needs it:
+
+| Variant | Instruction sets | CPUs |
+|---|---|---|
+| `haswell` | AVX2, FMA, F16C, BMI1, BMI2, LZCNT, MOVBE | Intel Haswell and later, AMD Excavator and Zen |
+| `ivybridge` | AVX, F16C | Intel Ivy Bridge, AMD Bulldozer and Piledriver |
+| `sse42` | SSE4.2, POPCNT | Intel Nehalem and Westmere, Sandy Bridge (AVX without F16C), and Pentium and Celeron models without AVX |
+
+Below that, `cpuVariant()` is empty and every load returns
+`Error::UnsupportedCpu` ([`API.md`](API.md#cpu-variant)). AVX counts only when
+the OS saves the AVX registers (XGETBV). There is no AVX-512 variant.
+
+How it fits together:
+
+- Each variant compiles `ggml-cpu`'s own sources with `ggml-cpu`'s own flags,
+  read at generate time, so flags a consumer adds to `ggml-cpu` after
+  `add_subdirectory` reach the variants too. The variant then adds its
+  instruction sets and `-fno-lto`.
+- `llvm-objcopy` renames every symbol a variant defines to carry the variant's
+  tag (`ggml_graph_compute__haswell`), the inline and template copies of
+  `std::` code included. No variant shares code with another, or with the
+  rest of the program. Only constants whose names spell out their value stay
+  shared.
+- `src/cpu_dispatch.cpp`, compiled for the baseline, defines the `ggml-cpu`
+  functions the library and ggml call, and forwards each to the chosen
+  variant. It replaces `ggml-cpu` in `ggml`'s link interface, and ggml's own
+  `ggml-cpu` is not built.
+- `MUSCRIPTOR_CPU_VARIANT=haswell|ivybridge|sse42` in the environment forces a
+  variant. `muscriptor_bench --list-devices` prints the one in use.
+
+It needs clang-cl, GCC or Clang, and `llvm-objcopy`, `llvm-nm`, `llvm-objdump`
+and `llvm-ar`, which configuring looks for next to the compiler and on the
+`PATH` (`MUSCRIPTOR_LLVM_OBJCOPY` points it at another toolchain). The option
+is for x86-64 only and excludes `MUSCRIPTOR_NATIVE`.
+
+Checks, all failing the build:
+
+- **Configure.** No instruction-set flag or macro may reach any target but
+  the variants, global `CMAKE_<LANG>_FLAGS` included. `ggml-cpu` must still
+  have the shape the variants copy: its key sources, `ggml-base` as its only
+  library, and no instruction-set flags of its own.
+- **Each variant.** The archive may not hold LTO bitcode, a static
+  initialiser (it would run before the CPU is checked), or an instruction
+  above the variant's level.
+- **On request.** `cmake --build <dir> --target muscriptor_check_cpu_baseline`
+  disassembles every other archive the library links, ggml-vulkan's included,
+  and fails on any instruction above SSE4.2.
+
+### Fixed baseline
+
+Without `MUSCRIPTOR_CPU_VARIANTS`, x86 builds target Ivy Bridge: SSE4.2, AVX
+and F16C on; AVX2, FMA and BMI2 off. These are pinned, and configuring fails
+if AVX2, FMA, BMI2 or AVX-512 reach ggml's compile flags; ggml would otherwise
+enable all six when native tuning is off.
 
 ## Vulkan
 

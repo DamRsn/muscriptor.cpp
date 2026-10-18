@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace msl
@@ -42,5 +43,18 @@ std::vector<Device> availableDevices();
  * @return An index into `inDevices`.
  */
 std::size_t autoDevice(std::span<const Device> inDevices);
+
+/**
+ * The instruction-set variant of the CPU backend this process runs. On an
+ * x86-64 build with MUSCRIPTOR_CPU_VARIANTS, the best of `"haswell"`,
+ * `"ivybridge"` and `"sse42"` the CPU supports, or the one the
+ * `MUSCRIPTOR_CPU_VARIANT` environment variable names. `"default"` on every
+ * other build.
+ *
+ * Empty when the CPU supports none of them, or not the one named: every load
+ * then fails with `Error::UnsupportedCpu`, whatever the device. Chosen on the
+ * first call and fixed for the life of the process. Thread-safe.
+ */
+std::string_view cpuVariant();
 
 } // namespace msl
