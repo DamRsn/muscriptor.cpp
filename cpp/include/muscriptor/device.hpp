@@ -46,8 +46,8 @@ std::size_t autoDevice(std::span<const Device> inDevices);
 
 /**
  * The instruction-set variant of the CPU backend this process runs. On an
- * x86-64 build with MUSCRIPTOR_CPU_VARIANTS, the best of `"haswell"`,
- * `"ivybridge"` and `"sse42"` the CPU supports, or the one the
+ * x86-64 build with MUSCRIPTOR_CPU_VARIANTS, the best of `"x86-64-v3"`,
+ * `"x86-64-v2+f16c"` and `"x86-64-v2"` the CPU supports, or the one the
  * `MUSCRIPTOR_CPU_VARIANT` environment variable names. `"default"` on every
  * other build.
  *

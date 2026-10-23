@@ -36,11 +36,12 @@
     {
       "name": "macos-x86_64",
       "displayName": "macOS x86_64",
-      "description": "Intel slice. Builds on an Intel or an Apple Silicon host.",
+      "description": "Intel slice, with CPU variants. Builds on an Intel or an Apple Silicon host. Needs llvm-objcopy, e.g. from Homebrew's llvm.",
       "inherits": "parity",
       "binaryDir": "${sourceDir}/build-macos-x86_64",
       "cacheVariables": {
-        "CMAKE_OSX_ARCHITECTURES": "x86_64"
+        "CMAKE_OSX_ARCHITECTURES": "x86_64",
+        "MUSCRIPTOR_CPU_VARIANTS": "ON"
       }
     },
     {

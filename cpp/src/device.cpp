@@ -175,7 +175,7 @@ std::size_t autoDevice(std::span<const Device> inDevices)
 std::string_view cpuVariant()
 {
 #if defined(MUSCRIPTOR_CPU_DISPATCH)
-    return cpuDispatch().tag;
+    return cpuDispatch().name;
 #else
     return "default";
 #endif
@@ -185,7 +185,7 @@ InitialisedBackend initBackend(std::optional<std::size_t> inDevice)
 {
 #if defined(MUSCRIPTOR_CPU_DISPATCH)
     // Every model needs a CPU backend, for the conditioning front-end at least.
-    if (const CpuDispatch& cpu = cpuDispatch(); cpu.tag.empty()) {
+    if (const CpuDispatch& cpu = cpuDispatch(); cpu.name.empty()) {
         throw Exception(Error::UnsupportedCpu, cpu.reason);
     }
 

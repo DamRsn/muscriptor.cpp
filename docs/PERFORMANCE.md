@@ -49,6 +49,26 @@ For stable numbers, run one configuration per process on an idle machine.
 Never run two benchmarks or test runs at the same time: ggml's threads wait on
 each other between ops, and competing for cores slows both runs down severalfold.
 
+### CPU variants
+
+On an Intel Core i7-10710U (6 cores, Windows, clang-cl), `medium` at F16 on
+the CPU, built with the `windows-x64` preset, with each variant forced through
+`MUSCRIPTOR_CPU_VARIANT` ([`BUILDING.md`](BUILDING.md#cpu-variants)). One run
+each, on a laptop:
+
+| Variant | Real-time factor | Prefill, chunk 0 | Decode p50 |
+|---|---|---|---|
+| `x86-64-v3` | 0.21x | 2.25 s | 49.2 ms |
+| `x86-64-v2+f16c` | 0.21x | 2.81 s | 49.7 ms |
+| `x86-64-v2` | 0.09x | 26.7 s | 68.8 ms |
+
+All three give the same 300-step token digest and the same 475 notes. With
+AVX but not F16C, the middle variant ran at `x86-64-v2` speed (27.9 s prefill,
+74.2 ms decode p50): what makes the difference is the fp16 conversion.
+
+The variants cost 1.9 MB of binary size: a statically linked Windows plugin,
+built Release with LTO, grew from 82.3 to 84.1 MB over the fixed baseline.
+
 ## Loading
 
 `muscriptor_bench --load-profile` times `Transcriber::load` through its public

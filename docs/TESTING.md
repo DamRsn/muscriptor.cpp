@@ -151,8 +151,8 @@ or an index from `--list-devices`.
 
 On a build with CPU variants ([`BUILDING.md`](BUILDING.md#cpu-variants)), the
 CPU tests run on the variant the machine selects. To cover all three, run
-`--device cpu` once per variant with `MUSCRIPTOR_CPU_VARIANT` set to `haswell`,
-`ivybridge` and `sse42`. `muscriptor_bench --list-devices` prints the variant
+`--device cpu` once per variant with `MUSCRIPTOR_CPU_VARIANT` set to
+`x86-64-v3`, `x86-64-v2+f16c` and `x86-64-v2`. `muscriptor_bench --list-devices` prints the variant
 in use.
 
 ### Tiers

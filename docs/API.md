@@ -69,11 +69,11 @@ which is always last, so the list is never empty. Each `Device` has a `name`
 ### CPU variant
 
 Every model also runs its conditioning front-end on the CPU, whatever the
-device. On a build with CPU variants (by default Windows x64 with clang-cl,
-[`BUILDING.md`](BUILDING.md#cpu-variants)), `cpuVariant()` names the
-instruction-set variant the CPU backend uses: `"haswell"`, `"ivybridge"` or
-`"sse42"`. It is `"default"` on other builds, and empty on a CPU without
-SSE4.2 and POPCNT, where every load returns `Error::UnsupportedCpu`.
+device. On a build with CPU variants ([`BUILDING.md`](BUILDING.md#cpu-variants)),
+`cpuVariant()` names the instruction-set variant the CPU backend uses:
+`"x86-64-v3"`, `"x86-64-v2+f16c"` or `"x86-64-v2"`. It is `"default"` on other
+builds, and empty on a CPU below `x86-64-v2`, where every load returns
+`Error::UnsupportedCpu`.
 
 The `MUSCRIPTOR_CPU_VARIANT` environment variable forces one of the three, for
 tests and benchmarks. A variant the CPU cannot run, or an unknown name, makes

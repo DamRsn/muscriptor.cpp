@@ -24,8 +24,8 @@ set(FMA "\tvf(n)?m(add|sub|addsub|subadd)[a-z0-9]*\t")
 set(VEX "\tv[a-z0-9]+(\t|$)")
 
 #[[
-Fails if `inLibrary` holds an instruction above `inLevel`: sse42, ivybridge
-(AVX and F16C) or haswell (AVX2, FMA, BMI1, BMI2, LZCNT and MOVBE). TZCNT is
+Fails if `inLibrary` holds an instruction above `inLevel`: v2 (no VEX), f16c
+(AVX and F16C) or v3 (AVX2, FMA, BMI1, BMI2, LZCNT and MOVBE). TZCNT is
 allowed everywhere: older CPUs run it as BSF, which compilers rely on.
 ]]
 function(check_instructions inLibrary inLevel)
@@ -41,11 +41,11 @@ function(check_instructions inLibrary inLevel)
         message(FATAL_ERROR "llvm-objdump could not disassemble ${inLibrary}")
     endif()
 
-    if(inLevel STREQUAL "sse42")
+    if(inLevel STREQUAL "v2")
         set(forbidden "${AVX512}|${VEX}|${BMI_LZCNT_MOVBE}")
-    elseif(inLevel STREQUAL "ivybridge")
+    elseif(inLevel STREQUAL "f16c")
         set(forbidden "${AVX512}|${FMA}|${BMI_LZCNT_MOVBE}|${AVX2_ONLY}|${AVX2_REGISTER_BROADCAST}|${AVX2_YMM_INTEGER}")
-    elseif(inLevel STREQUAL "haswell")
+    elseif(inLevel STREQUAL "v3")
         set(forbidden "${AVX512}")
     else()
         message(FATAL_ERROR "unknown instruction-set level '${inLevel}'")
@@ -57,7 +57,7 @@ function(check_instructions inLibrary inLevel)
     # not VEX, and these take a ymm register in AVX itself.
     list(FILTER hits EXCLUDE REGEX "\t(verr|verw)(\t|$)")
 
-    if(inLevel STREQUAL "ivybridge")
+    if(inLevel STREQUAL "f16c")
         list(FILTER hits EXCLUDE REGEX "\t(vpermilps|vpermilpd|vperm2f128|vptest)\t")
     endif()
 

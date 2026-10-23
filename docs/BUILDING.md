@@ -62,7 +62,7 @@ commit.
 | `parity` | `cpp/build` | `MUSCRIPTOR_NATIVE=OFF`, the build that ships |
 | `fast-cpu` | `cpp/build-fast-cpu` | `MUSCRIPTOR_GGML_FP32_ACCUM=OFF` |
 | `macos-arm64` | `cpp/build-macos-arm64` | `CMAKE_OSX_ARCHITECTURES=arm64` |
-| `macos-x86_64` | `cpp/build-macos-x86_64` | `CMAKE_OSX_ARCHITECTURES=x86_64` |
+| `macos-x86_64` | `cpp/build-macos-x86_64` | `CMAKE_OSX_ARCHITECTURES=x86_64`, `MUSCRIPTOR_CPU_VARIANTS=ON`. Needs `llvm-objcopy`, e.g. Homebrew's `llvm` |
 | `windows-x64` | `cpp/build-windows-x64` | `MUSCRIPTOR_CPU_VARIANTS=ON`. Needs clang-cl as `CC` and `CXX` |
 
 All but `fast-cpu` build what ships; the others inherit from `parity`. The
@@ -153,21 +153,28 @@ Three ways to build `ggml-cpu` for x86-64:
 
 - **Native** (`MUSCRIPTOR_NATIVE`, the default when the build machine is the
   target). ggml picks the instruction sets of the build machine.
-- **CPU variants** (`MUSCRIPTOR_CPU_VARIANTS`). For shipped Windows builds.
-- **Fixed baseline**, with both off. For shipped macOS Intel builds.
+- **CPU variants** (`MUSCRIPTOR_CPU_VARIANTS`). For shipped Windows and
+  macOS Intel builds.
+- **Fixed baseline**, with both off. For a shipped x86-64 build without the
+  LLVM tools the variants need.
 
 ### CPU variants
 
 With `MUSCRIPTOR_CPU_VARIANTS`, `ggml-cpu` is built three times, and the best
 build the CPU can run is chosen when the process first needs it:
 
-| Variant | Instruction sets | CPUs |
-|---|---|---|
-| `haswell` | AVX2, FMA, F16C, BMI1, BMI2, LZCNT, MOVBE | Intel Haswell and later, AMD Excavator and Zen |
-| `ivybridge` | AVX, F16C | Intel Ivy Bridge, AMD Bulldozer and Piledriver |
-| `sse42` | SSE4.2, POPCNT | Intel Nehalem and Westmere, Sandy Bridge (AVX without F16C), and Pentium and Celeron models without AVX |
+| Variant | Compiled with | Instruction sets | CPUs |
+|---|---|---|---|
+| `x86-64-v3` | `-march=x86-64-v3` | v2, plus AVX, AVX2, FMA, F16C, BMI1, BMI2, LZCNT, MOVBE | Intel Haswell and later, AMD Excavator and Zen |
+| `x86-64-v2+f16c` | `-march=x86-64-v2 -mavx -mf16c` | v2, plus AVX and F16C | Intel Ivy Bridge, AMD Piledriver, Steamroller and Jaguar |
+| `x86-64-v2` | `-march=x86-64-v2` | SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT, CMPXCHG16B, LAHF/SAHF | Intel Nehalem, Westmere and Sandy Bridge, AMD Bulldozer, Pentium and Celeron models without AVX, and Rosetta by default |
 
-Below that, `cpuVariant()` is empty and every load returns
+`x86-64-v2` and `x86-64-v3` are the x86-64 psABI levels, checked exactly. In
+between, AVX alone is not a variant: on an F16 checkpoint the matmuls are
+bound by fp16 conversion, which F16C speeds up and AVX does not
+([`PERFORMANCE.md`](PERFORMANCE.md#cpu-variants)).
+
+Below `x86-64-v2`, `cpuVariant()` is empty and every load returns
 `Error::UnsupportedCpu` ([`API.md`](API.md#cpu-variant)). AVX counts only when
 the OS saves the AVX registers (XGETBV). There is no AVX-512 variant.
 
@@ -178,7 +185,7 @@ How it fits together:
   `add_subdirectory` reach the variants too. The variant then adds its
   instruction sets and `-fno-lto`.
 - `llvm-objcopy` renames every symbol a variant defines to carry the variant's
-  tag (`ggml_graph_compute__haswell`), the inline and template copies of
+  tag (`ggml_graph_compute__v3`), the inline and template copies of
   `std::` code included. No variant shares code with another, or with the
   rest of the program. Only constants whose names spell out their value stay
   shared.
@@ -186,8 +193,8 @@ How it fits together:
   functions the library and ggml call, and forwards each to the chosen
   variant. It replaces `ggml-cpu` in `ggml`'s link interface, and ggml's own
   `ggml-cpu` is not built.
-- `MUSCRIPTOR_CPU_VARIANT=haswell|ivybridge|sse42` in the environment forces a
-  variant. `muscriptor_bench --list-devices` prints the one in use.
+- `MUSCRIPTOR_CPU_VARIANT` set to a variant's name in the environment forces
+  it. `muscriptor_bench --list-devices` prints the one in use.
 
 It needs clang-cl, GCC or Clang, and `llvm-objcopy`, `llvm-nm`, `llvm-objdump`
 and `llvm-ar`, which configuring looks for next to the compiler and on the
@@ -206,7 +213,7 @@ Checks, all failing the build:
   above the variant's level.
 - **On request.** `cmake --build <dir> --target muscriptor_check_cpu_baseline`
   disassembles every other archive the library links, ggml-vulkan's included,
-  and fails on any instruction above SSE4.2.
+  and fails on any instruction above `x86-64-v2`.
 
 ### Fixed baseline
 

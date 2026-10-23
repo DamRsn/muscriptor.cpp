@@ -22,9 +22,9 @@
     extern "C" void ggml_backend_cpu_set_n_threads__##tag(ggml_backend_t, int);                                        \
     extern "C" void ggml_backend_cpu_set_abort_callback__##tag(ggml_backend_t, ggml_abort_callback, void*);
 
-MUSCRIPTOR_DECLARE_CPU_VARIANT(sse42)
-MUSCRIPTOR_DECLARE_CPU_VARIANT(ivybridge)
-MUSCRIPTOR_DECLARE_CPU_VARIANT(haswell)
+MUSCRIPTOR_DECLARE_CPU_VARIANT(v2)
+MUSCRIPTOR_DECLARE_CPU_VARIANT(f16c)
+MUSCRIPTOR_DECLARE_CPU_VARIANT(v3)
 
 namespace msl
 {
@@ -33,8 +33,13 @@ namespace
 {
 
     struct CpuFeatures {
+        bool sse3 = false;
+        bool ssse3 = false;
+        bool sse41 = false;
         bool sse42 = false;
         bool popcnt = false;
+        bool cmpxchg16b = false;
+        bool lahf = false;
         // False, with everything below that needs it, unless the OS also saves
         // the ymm registers.
         bool avx = false;
@@ -48,7 +53,10 @@ namespace
     };
 
     struct Variant {
+        // Part of the renamed symbols, so an identifier.
         std::string_view tag;
+        // What `cpuVariant()` returns.
+        std::string_view name;
         // The instruction sets its compile flags allow, for
         // `Error::UnsupportedCpu`'s message.
         std::string_view needs;
@@ -65,30 +73,36 @@ namespace
     &ggml_backend_cpu_reg__##tag, &ggml_backend_cpu_init__##tag, &ggml_backend_is_cpu__##tag,                          \
         &ggml_backend_cpu_set_n_threads__##tag, &ggml_backend_cpu_set_abort_callback__##tag
 
-    bool runsSse42(const CpuFeatures& inCpu)
+    // The x86-64 psABI levels, whose lists -march=x86-64-v2 and -v3 compile for.
+    bool runsV2(const CpuFeatures& inCpu)
     {
-        return inCpu.sse42 && inCpu.popcnt;
+        return inCpu.sse3 && inCpu.ssse3 && inCpu.sse41 && inCpu.sse42 && inCpu.popcnt && inCpu.cmpxchg16b
+               && inCpu.lahf;
     }
 
-    bool runsIvyBridge(const CpuFeatures& inCpu)
+    bool runsF16c(const CpuFeatures& inCpu)
     {
-        return runsSse42(inCpu) && inCpu.avx && inCpu.f16c;
+        return runsV2(inCpu) && inCpu.avx && inCpu.f16c;
     }
 
-    bool runsHaswell(const CpuFeatures& inCpu)
+    bool runsV3(const CpuFeatures& inCpu)
     {
-        return runsIvyBridge(inCpu) && inCpu.avx2 && inCpu.fma && inCpu.bmi1 && inCpu.bmi2 && inCpu.lzcnt
-               && inCpu.movbe;
+        return runsF16c(inCpu) && inCpu.avx2 && inCpu.fma && inCpu.bmi1 && inCpu.bmi2 && inCpu.lzcnt && inCpu.movbe;
     }
 
     // Best first.
     const std::array<Variant, 3> VARIANTS {{
-        {"haswell",
+        {"v3",
+         "x86-64-v3",
          "AVX2, FMA, F16C, BMI1, BMI2, LZCNT and MOVBE",
-         &runsHaswell,
-         MUSCRIPTOR_CPU_VARIANT_ENTRY_POINTS(haswell)},
-        {"ivybridge", "AVX and F16C", &runsIvyBridge, MUSCRIPTOR_CPU_VARIANT_ENTRY_POINTS(ivybridge)},
-        {"sse42", "SSE4.2 and POPCNT", &runsSse42, MUSCRIPTOR_CPU_VARIANT_ENTRY_POINTS(sse42)},
+         &runsV3,
+         MUSCRIPTOR_CPU_VARIANT_ENTRY_POINTS(v3)},
+        {"f16c", "x86-64-v2+f16c", "AVX and F16C", &runsF16c, MUSCRIPTOR_CPU_VARIANT_ENTRY_POINTS(f16c)},
+        {"v2",
+         "x86-64-v2",
+         "SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT, CMPXCHG16B and LAHF/SAHF",
+         &runsV2,
+         MUSCRIPTOR_CPU_VARIANT_ENTRY_POINTS(v2)},
     }};
 
     struct CpuidRegisters {
@@ -147,8 +161,13 @@ namespace
         const bool os_saves_ymm = bit(leaf1.ecx, 27) && (xcr0() & 0x6U) == 0x6U;
 
         CpuFeatures cpu;
+        cpu.sse3 = bit(leaf1.ecx, 0);
+        cpu.ssse3 = bit(leaf1.ecx, 9);
+        cpu.cmpxchg16b = bit(leaf1.ecx, 13);
+        cpu.sse41 = bit(leaf1.ecx, 19);
         cpu.sse42 = bit(leaf1.ecx, 20);
         cpu.popcnt = bit(leaf1.ecx, 23);
+        cpu.lahf = bit(leaf81.ecx, 0);
         cpu.avx = bit(leaf1.ecx, 28) && os_saves_ymm;
         cpu.f16c = bit(leaf1.ecx, 29) && cpu.avx;
         cpu.fma = bit(leaf1.ecx, 12) && cpu.avx;
@@ -165,7 +184,7 @@ namespace
         std::string list;
 
         for (const Variant& variant: VARIANTS) {
-            list += (list.empty() ? "" : ", ") + std::string(variant.tag);
+            list += (list.empty() ? "" : ", ") + std::string(variant.name);
         }
 
         return list;
@@ -182,7 +201,7 @@ namespace
 
         if (const char* forced = std::getenv("MUSCRIPTOR_CPU_VARIANT"); forced != nullptr && forced[0] != '\0') {
             for (const Variant& variant: VARIANTS) {
-                if (variant.tag != forced) {
+                if (variant.name != forced) {
                     continue;
                 }
 
@@ -193,7 +212,7 @@ namespace
                                  + ", which this CPU lacks"}};
                 }
 
-                return {&variant, {variant.tag, ""}};
+                return {&variant, {variant.name, ""}};
             }
 
             return {nullptr, {"", "MUSCRIPTOR_CPU_VARIANT=" + std::string(forced) + " is not one of " + variantList()}};
@@ -201,7 +220,7 @@ namespace
 
         for (const Variant& variant: VARIANTS) {
             if (variant.runs(cpu)) {
-                return {&variant, {variant.tag, ""}};
+                return {&variant, {variant.name, ""}};
             }
         }
 

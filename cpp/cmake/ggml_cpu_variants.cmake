@@ -14,31 +14,31 @@ Included from CMakeLists.txt after the library targets, with every GGML_<ISA>
 option off.
 ]]
 
-set(MUSCRIPTOR_CPU_VARIANT_TAGS sse42 ivybridge haswell)
+# The x86-64 psABI levels v2 and v3, and v2 with AVX and F16C between them.
+# Each tag is part of the renamed symbols. clang-cl takes -march as clang does.
+set(MUSCRIPTOR_CPU_VARIANT_TAGS v2 f16c v3)
+
+set(MUSCRIPTOR_CPU_FLAGS_v2 -march=x86-64-v2)
+set(MUSCRIPTOR_CPU_FLAGS_f16c -march=x86-64-v2 -mavx -mf16c)
+set(MUSCRIPTOR_CPU_FLAGS_v3 -march=x86-64-v3)
 
 if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    # clang-cl ignores /arch:SSE4.2 on x64, with a warning only. /arch:AVX2
-    # brings FMA, F16C, BMI1, BMI2, LZCNT and MOVBE.
-    set(MUSCRIPTOR_CPU_FLAGS_sse42 -msse4.2)
-    set(MUSCRIPTOR_CPU_FLAGS_ivybridge /arch:AVX -mf16c)
-    set(MUSCRIPTOR_CPU_FLAGS_haswell /arch:AVX2)
     set(MUSCRIPTOR_CPU_MANGLING msvc)
+    # ggml's SSSE3 path, which no MSVC build of ggml reaches, passes block
+    # pointers to _mm_prefetch, which clang-cl declares as taking const char*.
+    set(MUSCRIPTOR_CPU_EXTRA_FLAGS $<$<COMPILE_LANGUAGE:C>:-Wno-error=incompatible-pointer-types>)
 elseif(MSVC)
     message(FATAL_ERROR
         "MUSCRIPTOR_CPU_VARIANTS needs clang-cl, GCC or Clang. With cl.exe, configure with "
         "-DMUSCRIPTOR_CPU_VARIANTS=OFF.")
 else()
-    # ggml's own spellings for the same levels.
-    set(MUSCRIPTOR_CPU_FLAGS_sse42 -msse4.2)
-    set(MUSCRIPTOR_CPU_FLAGS_ivybridge -msse4.2 -mavx -mf16c)
-    set(MUSCRIPTOR_CPU_FLAGS_haswell -msse4.2 -mavx -mavx2 -mf16c -mfma -mbmi2)
     set(MUSCRIPTOR_CPU_MANGLING itanium)
 endif()
 
 # The definitions ggml adds next to its flags, for these levels.
-set(MUSCRIPTOR_CPU_DEFINITIONS_sse42 GGML_SSE42)
-set(MUSCRIPTOR_CPU_DEFINITIONS_ivybridge GGML_SSE42 GGML_AVX GGML_F16C)
-set(MUSCRIPTOR_CPU_DEFINITIONS_haswell GGML_SSE42 GGML_AVX GGML_F16C GGML_FMA GGML_AVX2 GGML_BMI2)
+set(MUSCRIPTOR_CPU_DEFINITIONS_v2 GGML_SSE42)
+set(MUSCRIPTOR_CPU_DEFINITIONS_f16c GGML_SSE42 GGML_AVX GGML_F16C)
+set(MUSCRIPTOR_CPU_DEFINITIONS_v3 GGML_SSE42 GGML_AVX GGML_F16C GGML_FMA GGML_AVX2 GGML_BMI2)
 
 # llvm-objcopy cannot rename bitcode.
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
@@ -225,7 +225,8 @@ foreach(MUSCRIPTOR_TAG ${MUSCRIPTOR_CPU_VARIANT_TAGS})
         PRIVATE
             $<TARGET_PROPERTY:ggml-cpu,COMPILE_OPTIONS>
             ${MUSCRIPTOR_CPU_FLAGS_${MUSCRIPTOR_TAG}}
-            ${MUSCRIPTOR_CPU_NO_LTO})
+            ${MUSCRIPTOR_CPU_NO_LTO}
+            ${MUSCRIPTOR_CPU_EXTRA_FLAGS})
     target_compile_features(${MUSCRIPTOR_TARGET} PRIVATE ${MUSCRIPTOR_GGML_CPU_FEATURES})
     target_link_libraries(${MUSCRIPTOR_TARGET} PRIVATE ggml-base)
     set_target_properties(${MUSCRIPTOR_TARGET} PROPERTIES
@@ -303,10 +304,10 @@ list(JOIN MUSCRIPTOR_BASELINE_LIBRARIES "|" MUSCRIPTOR_BASELINE_INPUTS)
 add_custom_target(muscriptor_check_cpu_baseline
     COMMAND ${CMAKE_COMMAND} ${MUSCRIPTOR_CPU_TOOL_ARGS}
             -DACTION=check
-            -DLEVEL=sse42
+            -DLEVEL=v2
             "-DINPUTS=${MUSCRIPTOR_BASELINE_INPUTS}"
             -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/ggml-cpu-variants
             -P ${MUSCRIPTOR_CPU_TOOL}
     DEPENDS muscriptor_ggml muscriptor_ggml_cpu
-    COMMENT "Checking the code outside the ggml-cpu variants for instructions above SSE4.2"
+    COMMENT "Checking the code outside the ggml-cpu variants for instructions above x86-64-v2"
     VERBATIM)
