@@ -323,6 +323,9 @@ void printDevice(const msl::Device& inDevice)
 {
     std::printf("backend   %8s\n", inDevice.backend.c_str());
     std::printf("device    %s\n", inDevice.name.c_str());
+
+    const std::string_view cpu_variant = msl::cpuVariant();
+    std::printf("cpu       %.*s\n", static_cast<int>(cpu_variant.size()), cpu_variant.data());
 }
 
 } // namespace
@@ -359,6 +362,9 @@ int main(int argc, char** argv)
             }
 
             std::printf("enumerated in %.1f ms\n", enumeration_ms);
+
+            const std::string_view cpu_variant = msl::cpuVariant();
+            std::printf("cpu variant %.*s\n", static_cast<int>(cpu_variant.size()), cpu_variant.data());
             return 0;
         }
 
