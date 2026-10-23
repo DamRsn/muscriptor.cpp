@@ -1,18 +1,5 @@
-#[[
-ggml-cpu once per x86-64 instruction-set level, in one static binary
-(docs/BUILDING.md#cpu-variants).
-
-Each variant compiles ggml-cpu's sources with ggml-cpu's own flags, read at
-generate time, plus its instruction set. cpu_variant_tool.cmake then renames
-every symbol a variant defines to carry its tag, inline and template copies
-included, so the linker can neither mix variants nor hand variant code to the
-rest of the program. src/cpu_dispatch.cpp, compiled for the baseline, takes
-ggml-cpu's place in ggml's link interface and forwards to the best variant the
-CPU runs. ggml's own ggml-cpu is left out of the build.
-
-Included from CMakeLists.txt after the library targets, with every GGML_<ISA>
-option off.
-]]
+# ggml-cpu once per x86-64 level, picked at run time by src/cpu_dispatch.cpp
+# (docs/BUILDING.md#cpu-variants).
 
 # The x86-64 psABI levels v2 and v3, and v2 with AVX and F16C between them.
 # Each tag is part of the renamed symbols. clang-cl takes -march as clang does.
@@ -34,11 +21,6 @@ elseif(MSVC)
 else()
     set(MUSCRIPTOR_CPU_MANGLING itanium)
 endif()
-
-# The definitions ggml adds next to its flags, for these levels.
-set(MUSCRIPTOR_CPU_DEFINITIONS_v2 GGML_SSE42)
-set(MUSCRIPTOR_CPU_DEFINITIONS_f16c GGML_SSE42 GGML_AVX GGML_F16C)
-set(MUSCRIPTOR_CPU_DEFINITIONS_v3 GGML_SSE42 GGML_AVX GGML_F16C GGML_FMA GGML_AVX2 GGML_BMI2)
 
 # llvm-objcopy cannot rename bitcode.
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
@@ -86,8 +68,8 @@ set(MUSCRIPTOR_CPU_TOOL_ARGS
 get_target_property(MUSCRIPTOR_GGML_SRC_DIR ggml-cpu SOURCE_DIR)
 get_directory_property(MUSCRIPTOR_GGML_ARCH DIRECTORY ${MUSCRIPTOR_GGML_SRC_DIR} DEFINITION GGML_SYSTEM_ARCH)
 
-if(NOT MUSCRIPTOR_GGML_ARCH STREQUAL "x86")
-    message(FATAL_ERROR "ggml detected '${MUSCRIPTOR_GGML_ARCH}' rather than x86, so its x86 sources are not in ggml-cpu.")
+if(NOT MUSCRIPTOR_GGML_ARCH STREQUAL "x86" OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "MUSCRIPTOR_CPU_VARIANTS is for x86-64 targets only; ggml detected '${MUSCRIPTOR_GGML_ARCH}'.")
 endif()
 
 get_target_property(MUSCRIPTOR_GGML_CPU_SOURCES ggml-cpu SOURCES)
@@ -130,71 +112,6 @@ foreach(MUSCRIPTOR_PROPERTY C_STANDARD C_STANDARD_REQUIRED C_EXTENSIONS CXX_STAN
     endif()
 endforeach()
 
-# --- no instruction-set flags outside the variants -----------------------
-#
-# A flag anywhere else would compile code that the lowest CPU might not run.
-# Global flags reach the variants and the dispatcher too.
-
-set(MUSCRIPTOR_ISA_FLAG_REGEX
-    "(^|[ ;:\"])(/arch:|-march=|-mcpu=|-m(sse|ssse|avx|f16c|fma|bmi|lzcnt|popcnt|movbe|amx|xop|aes|pclmul|sha|gfni|vaes|vpclmul))")
-set(MUSCRIPTOR_ISA_DEFINITION_REGEX
-    "(^|[ ;:\"])(GGML_(SSE42|AVX|F16C|FMA|BMI2|AMX)|__(SSE|SSSE|AVX|F16C|FMA|BMI|LZCNT|POPCNT|MOVBE|AMX)[A-Z0-9_]*__)")
-
-function(muscriptor_check_no_isa inWhat inFlags inDefinitions)
-    set(found "")
-
-    if("${inFlags}" MATCHES "${MUSCRIPTOR_ISA_FLAG_REGEX}")
-        set(found ${CMAKE_MATCH_2})
-    elseif("${inDefinitions}" MATCHES "${MUSCRIPTOR_ISA_DEFINITION_REGEX}")
-        set(found ${CMAKE_MATCH_2})
-    endif()
-
-    if(found)
-        message(FATAL_ERROR
-            "${inWhat} sets an instruction set (${found}...). With MUSCRIPTOR_CPU_VARIANTS only the ggml-cpu "
-            "variants may, or code built with it can fault on a CPU the dispatcher sends to a lower variant.")
-    endif()
-endfunction()
-
-foreach(MUSCRIPTOR_LANG C CXX)
-    set(MUSCRIPTOR_GLOBAL_FLAGS "${CMAKE_${MUSCRIPTOR_LANG}_FLAGS}")
-
-    foreach(MUSCRIPTOR_CONFIG DEBUG RELEASE RELWITHDEBINFO MINSIZEREL ${CMAKE_BUILD_TYPE} ${CMAKE_CONFIGURATION_TYPES})
-        string(TOUPPER ${MUSCRIPTOR_CONFIG} MUSCRIPTOR_CONFIG)
-        string(APPEND MUSCRIPTOR_GLOBAL_FLAGS " ${CMAKE_${MUSCRIPTOR_LANG}_FLAGS_${MUSCRIPTOR_CONFIG}}")
-    endforeach()
-
-    muscriptor_check_no_isa("CMAKE_${MUSCRIPTOR_LANG}_FLAGS" "${MUSCRIPTOR_GLOBAL_FLAGS}" "${MUSCRIPTOR_GLOBAL_FLAGS}")
-endforeach()
-
-get_directory_property(MUSCRIPTOR_GGML_DIR_OPTIONS DIRECTORY ${MUSCRIPTOR_GGML_SRC_DIR} COMPILE_OPTIONS)
-muscriptor_check_no_isa("ggml's source directory" "${MUSCRIPTOR_GGML_DIR_OPTIONS}" "${MUSCRIPTOR_GGML_DIR_DEFINITIONS}")
-
-foreach(MUSCRIPTOR_TARGET ggml-cpu ggml-base ggml ggml-metal ggml-vulkan muscriptor_ggml pffft)
-    if(TARGET ${MUSCRIPTOR_TARGET})
-        set(MUSCRIPTOR_TARGET_FLAGS)
-        set(MUSCRIPTOR_TARGET_DEFINITIONS)
-
-        foreach(MUSCRIPTOR_PROPERTY COMPILE_OPTIONS INTERFACE_COMPILE_OPTIONS)
-            get_target_property(MUSCRIPTOR_VALUE ${MUSCRIPTOR_TARGET} ${MUSCRIPTOR_PROPERTY})
-
-            if(MUSCRIPTOR_VALUE)
-                list(APPEND MUSCRIPTOR_TARGET_FLAGS ${MUSCRIPTOR_VALUE})
-            endif()
-        endforeach()
-
-        foreach(MUSCRIPTOR_PROPERTY COMPILE_DEFINITIONS INTERFACE_COMPILE_DEFINITIONS)
-            get_target_property(MUSCRIPTOR_VALUE ${MUSCRIPTOR_TARGET} ${MUSCRIPTOR_PROPERTY})
-
-            if(MUSCRIPTOR_VALUE)
-                list(APPEND MUSCRIPTOR_TARGET_DEFINITIONS ${MUSCRIPTOR_VALUE})
-            endif()
-        endforeach()
-
-        muscriptor_check_no_isa("Target ${MUSCRIPTOR_TARGET}" "${MUSCRIPTOR_TARGET_FLAGS}" "${MUSCRIPTOR_TARGET_DEFINITIONS}")
-    endif()
-endforeach()
-
 # --- variants -----------------------------------------------------------
 
 get_property(MUSCRIPTOR_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
@@ -219,8 +136,7 @@ foreach(MUSCRIPTOR_TAG ${MUSCRIPTOR_CPU_VARIANT_TAGS})
     target_compile_definitions(${MUSCRIPTOR_TARGET}
         PRIVATE
             ${MUSCRIPTOR_GGML_DIR_DEFINITIONS}
-            $<TARGET_PROPERTY:ggml-cpu,COMPILE_DEFINITIONS>
-            ${MUSCRIPTOR_CPU_DEFINITIONS_${MUSCRIPTOR_TAG}})
+            $<TARGET_PROPERTY:ggml-cpu,COMPILE_DEFINITIONS>)
     target_compile_options(${MUSCRIPTOR_TARGET}
         PRIVATE
             $<TARGET_PROPERTY:ggml-cpu,COMPILE_OPTIONS>

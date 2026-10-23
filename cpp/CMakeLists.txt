@@ -60,37 +60,14 @@ set(GGML_BLAS        OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP      OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP      OFF)
 
-# x86-64 as ggml's ggml_get_system_arch decides it, 64-bit only. The CPU
-# variants check that the two agree.
-if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64"
-        OR (NOT CMAKE_OSX_ARCHITECTURES AND CMAKE_GENERATOR_PLATFORM MATCHES "^(x64|X64|x86_64|amd64|AMD64)$")
-        OR (NOT CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_GENERATOR_PLATFORM
-            AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")))
-    set(MUSCRIPTOR_X86_64 ON)
-else()
-    set(MUSCRIPTOR_X86_64 OFF)
-endif()
-
 # One ggml-cpu per x86-64 instruction-set level, chosen at run time
 # (cmake/ggml_cpu_variants.cmake, docs/BUILDING.md#cpu-variants).
 option(MUSCRIPTOR_CPU_VARIANTS "Build ggml-cpu for several x86-64 levels and pick one at run time" OFF)
 
-if(MUSCRIPTOR_CPU_VARIANTS AND NOT MUSCRIPTOR_X86_64)
-    message(FATAL_ERROR "MUSCRIPTOR_CPU_VARIANTS is for x86-64 targets only.")
-endif()
-
 # GGML_NATIVE compiles for the build machine, and the result can fault on older
-# CPUs. Off by default when the target is not the build machine: the x86_64
-# slice on an Apple Silicon host is one, and there CMAKE_CROSSCOMPILING is false.
-if(MUSCRIPTOR_CPU_VARIANTS OR CMAKE_CROSSCOMPILING
-        OR (CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_OSX_ARCHITECTURES STREQUAL CMAKE_HOST_SYSTEM_PROCESSOR))
-    set(MUSCRIPTOR_NATIVE_DEFAULT OFF)
-else()
-    set(MUSCRIPTOR_NATIVE_DEFAULT ON)
-endif()
-
-option(MUSCRIPTOR_NATIVE "Optimize for the build machine's CPU. Never for a shipped build"
-    ${MUSCRIPTOR_NATIVE_DEFAULT})
+# CPUs, so it is off unless MUSCRIPTOR_NATIVE. It must also be off for the x86_64
+# slice on an Apple Silicon host, where CMAKE_CROSSCOMPILING is false.
+option(MUSCRIPTOR_NATIVE "Optimize for the build machine's CPU. Never for a shipped build" OFF)
 set(GGML_NATIVE      ${MUSCRIPTOR_NATIVE} CACHE BOOL "" FORCE)
 set(GGML_NATIVE      ${MUSCRIPTOR_NATIVE})
 
@@ -386,7 +363,7 @@ set_target_properties(muscriptor_ggml PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # not reach a consumer's targets.
 target_compile_features(muscriptor_ggml PUBLIC cxx_std_23)
 
-# After every library target exists: it checks their compile flags.
+# After every library target exists: its baseline check lists their archives.
 if(MUSCRIPTOR_CPU_VARIANTS)
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/ggml_cpu_variants.cmake)
     target_compile_definitions(muscriptor_ggml PRIVATE MUSCRIPTOR_CPU_DISPATCH)

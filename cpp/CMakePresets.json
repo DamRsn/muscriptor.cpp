@@ -3,14 +3,13 @@
   "configurePresets": [
     {
       "name": "parity",
-      "displayName": "Parity (default): fp32 accumulation on ARM, no native tuning",
+      "displayName": "Parity (default): fp32 accumulation on ARM",
       "description": "The build the CPU test tolerances assume. What ships.",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
-        "MUSCRIPTOR_GGML_FP32_ACCUM": "ON",
-        "MUSCRIPTOR_NATIVE": "OFF"
+        "MUSCRIPTOR_GGML_FP32_ACCUM": "ON"
       }
     },
     {

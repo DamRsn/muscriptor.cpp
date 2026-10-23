@@ -17,7 +17,7 @@ To build against a local ggml checkout instead, add
 | Option | Default | Effect |
 |---|---|---|
 | `MUSCRIPTOR_GGML_FP32_ACCUM` | `ON` | On ARM, `ggml-cpu` sums F16 matmuls in fp32 instead of fp16. See below. |
-| `MUSCRIPTOR_NATIVE` | `ON`, except when cross-compiling, building another macOS architecture, or with `MUSCRIPTOR_CPU_VARIANTS` | Tunes the build for the machine it is compiled on (ggml's `GGML_NATIVE`). The binary may crash on other CPUs: turn it off for anything shipped ([x86 instruction sets](#x86-instruction-sets)). |
+| `MUSCRIPTOR_NATIVE` | `OFF` | Tunes the build for the machine it is compiled on (ggml's `GGML_NATIVE`). For local benchmarking only: the binary may crash on other CPUs ([x86 instruction sets](#x86-instruction-sets)). |
 | `MUSCRIPTOR_CPU_VARIANTS` | `OFF` | Builds `ggml-cpu` once per x86-64 level and picks one at run time ([CPU variants](#cpu-variants)). |
 | `MUSCRIPTOR_METAL` | `ON` on Apple | Builds the Metal backend. |
 | `MUSCRIPTOR_METAL_PRECOMPILED` | `ON` with Metal | Compiles the Metal shaders into `.metallib` files at build time, which the executable ships. `OFF` embeds the shader source and compiles it at run time ([Metal](#metal)). |
@@ -59,7 +59,7 @@ commit.
 
 | Preset | Build directory | Settings |
 |---|---|---|
-| `parity` | `cpp/build` | `MUSCRIPTOR_NATIVE=OFF`, the build that ships |
+| `parity` | `cpp/build` | The defaults |
 | `fast-cpu` | `cpp/build-fast-cpu` | `MUSCRIPTOR_GGML_FP32_ACCUM=OFF` |
 | `macos-arm64` | `cpp/build-macos-arm64` | `CMAKE_OSX_ARCHITECTURES=arm64` |
 | `macos-x86_64` | `cpp/build-macos-x86_64` | `CMAKE_OSX_ARCHITECTURES=x86_64`, `MUSCRIPTOR_CPU_VARIANTS=ON`. Needs `llvm-objcopy`, e.g. Homebrew's `llvm` |
@@ -151,8 +151,8 @@ the same host could otherwise point the search at its own bundle.
 
 Three ways to build `ggml-cpu` for x86-64:
 
-- **Native** (`MUSCRIPTOR_NATIVE`, the default when the build machine is the
-  target). ggml picks the instruction sets of the build machine.
+- **Native** (`MUSCRIPTOR_NATIVE`). ggml picks the instruction sets of the
+  build machine. For local benchmarking only.
 - **CPU variants** (`MUSCRIPTOR_CPU_VARIANTS`). For shipped Windows and
   macOS Intel builds.
 - **Fixed baseline**, with both off. For a shipped x86-64 build without the
@@ -190,24 +190,22 @@ How it fits together:
   rest of the program. Only constants whose names spell out their value stay
   shared.
 - `src/cpu_dispatch.cpp`, compiled for the baseline, defines the `ggml-cpu`
-  functions the library and ggml call, and forwards each to the chosen
-  variant. It replaces `ggml-cpu` in `ggml`'s link interface, and ggml's own
-  `ggml-cpu` is not built.
+  functions the library and ggml call. It takes the chosen variant's
+  `ggml_backend_cpu_reg` and reaches the rest through that registry. It
+  replaces `ggml-cpu` in `ggml`'s link interface, and ggml's own `ggml-cpu`
+  is not built.
 - `MUSCRIPTOR_CPU_VARIANT` set to a variant's name in the environment forces
   it. `muscriptor_bench --list-devices` prints the one in use.
 
 It needs clang-cl, GCC or Clang, and `llvm-objcopy`, `llvm-nm`, `llvm-objdump`
 and `llvm-ar`, which configuring looks for next to the compiler and on the
 `PATH` (`MUSCRIPTOR_LLVM_OBJCOPY` points it at another toolchain). The option
-is for x86-64 only and excludes `MUSCRIPTOR_NATIVE`, whose default it turns
-off.
+is for x86-64 only and excludes `MUSCRIPTOR_NATIVE`.
 
 Checks, all failing the build:
 
-- **Configure.** No instruction-set flag or macro may reach any target but
-  the variants, global `CMAKE_<LANG>_FLAGS` included. `ggml-cpu` must still
-  have the shape the variants copy: its key sources, `ggml-base` as its only
-  library, and no instruction-set flags of its own.
+- **Configure.** `ggml-cpu` must still have the shape the variants copy: its
+  key sources and `ggml-base` as its only library.
 - **Each variant.** The archive may not hold LTO bitcode, a static
   initialiser (it would run before the CPU is checked), or an instruction
   above the variant's level.

@@ -13,18 +13,11 @@
 #include <intrin.h>
 #endif
 
-// What each ggml-cpu variant defines, under the names the build renames them to
+// Each variant's ggml_backend_cpu_reg, under the name the build renames it to
 // (cmake/ggml_cpu_variants.cmake).
-#define MUSCRIPTOR_DECLARE_CPU_VARIANT(tag)                                                                            \
-    extern "C" ggml_backend_reg_t ggml_backend_cpu_reg__##tag(void);                                                   \
-    extern "C" ggml_backend_t ggml_backend_cpu_init__##tag(void);                                                      \
-    extern "C" bool ggml_backend_is_cpu__##tag(ggml_backend_t);                                                        \
-    extern "C" void ggml_backend_cpu_set_n_threads__##tag(ggml_backend_t, int);                                        \
-    extern "C" void ggml_backend_cpu_set_abort_callback__##tag(ggml_backend_t, ggml_abort_callback, void*);
-
-MUSCRIPTOR_DECLARE_CPU_VARIANT(v2)
-MUSCRIPTOR_DECLARE_CPU_VARIANT(f16c)
-MUSCRIPTOR_DECLARE_CPU_VARIANT(v3)
+extern "C" ggml_backend_reg_t ggml_backend_cpu_reg__v2(void);
+extern "C" ggml_backend_reg_t ggml_backend_cpu_reg__f16c(void);
+extern "C" ggml_backend_reg_t ggml_backend_cpu_reg__v3(void);
 
 namespace msl
 {
@@ -53,25 +46,14 @@ namespace
     };
 
     struct Variant {
-        // Part of the renamed symbols, so an identifier.
-        std::string_view tag;
         // What `cpuVariant()` returns.
         std::string_view name;
         // The instruction sets its compile flags allow, for
         // `Error::UnsupportedCpu`'s message.
         std::string_view needs;
         bool (*runs)(const CpuFeatures&);
-
         ggml_backend_reg_t (*reg)();
-        ggml_backend_t (*init)();
-        bool (*is_cpu)(ggml_backend_t);
-        void (*set_n_threads)(ggml_backend_t, int);
-        void (*set_abort_callback)(ggml_backend_t, ggml_abort_callback, void*);
     };
-
-#define MUSCRIPTOR_CPU_VARIANT_ENTRY_POINTS(tag)                                                                       \
-    &ggml_backend_cpu_reg__##tag, &ggml_backend_cpu_init__##tag, &ggml_backend_is_cpu__##tag,                          \
-        &ggml_backend_cpu_set_n_threads__##tag, &ggml_backend_cpu_set_abort_callback__##tag
 
     // The x86-64 psABI levels, whose lists -march=x86-64-v2 and -v3 compile for.
     bool runsV2(const CpuFeatures& inCpu)
@@ -92,17 +74,12 @@ namespace
 
     // Best first.
     const std::array<Variant, 3> VARIANTS {{
-        {"v3",
-         "x86-64-v3",
-         "AVX2, FMA, F16C, BMI1, BMI2, LZCNT and MOVBE",
-         &runsV3,
-         MUSCRIPTOR_CPU_VARIANT_ENTRY_POINTS(v3)},
-        {"f16c", "x86-64-v2+f16c", "AVX and F16C", &runsF16c, MUSCRIPTOR_CPU_VARIANT_ENTRY_POINTS(f16c)},
-        {"v2",
-         "x86-64-v2",
+        {"x86-64-v3", "AVX2, FMA, F16C, BMI1, BMI2, LZCNT and MOVBE", &runsV3, &ggml_backend_cpu_reg__v3},
+        {"x86-64-v2+f16c", "AVX and F16C", &runsF16c, &ggml_backend_cpu_reg__f16c},
+        {"x86-64-v2",
          "SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT, CMPXCHG16B and LAHF/SAHF",
          &runsV2,
-         MUSCRIPTOR_CPU_VARIANT_ENTRY_POINTS(v2)},
+         &ggml_backend_cpu_reg__v2},
     }};
 
     struct CpuidRegisters {
@@ -249,8 +226,8 @@ const CpuDispatch& cpuDispatch()
 
 } // namespace msl
 
-// The ggml-cpu functions the rest of the build calls. Everything else in
-// ggml-cpu is reached through the backend and registry these return.
+// The ggml-cpu functions the rest of the build calls. Only the registry comes
+// from the variant; the others go through it.
 
 ggml_backend_reg_t ggml_backend_cpu_reg(void)
 {
@@ -260,26 +237,31 @@ ggml_backend_reg_t ggml_backend_cpu_reg(void)
 
 ggml_backend_t ggml_backend_cpu_init(void)
 {
-    const msl::Variant* variant = msl::variant();
-    return variant != nullptr ? variant->init() : nullptr;
+    ggml_backend_reg_t reg = ggml_backend_cpu_reg();
+    return reg != nullptr ? ggml_backend_dev_init(ggml_backend_reg_dev_get(reg, 0), nullptr) : nullptr;
 }
 
 bool ggml_backend_is_cpu(ggml_backend_t inBackend)
 {
-    const msl::Variant* variant = msl::variant();
-    return variant != nullptr && variant->is_cpu(inBackend);
+    ggml_backend_reg_t reg = ggml_backend_cpu_reg();
+    return reg != nullptr && inBackend != nullptr
+           && ggml_backend_get_device(inBackend) == ggml_backend_reg_dev_get(reg, 0);
 }
 
 void ggml_backend_cpu_set_n_threads(ggml_backend_t inBackend, int inThreads)
 {
-    if (const msl::Variant* variant = msl::variant(); variant != nullptr) {
-        variant->set_n_threads(inBackend, inThreads);
+    if (ggml_backend_reg_t reg = ggml_backend_cpu_reg(); reg != nullptr) {
+        auto set = reinterpret_cast<ggml_backend_set_n_threads_t>(
+            ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads"));
+        set(inBackend, inThreads);
     }
 }
 
 void ggml_backend_cpu_set_abort_callback(ggml_backend_t inBackend, ggml_abort_callback inCallback, void* inCallbackData)
 {
-    if (const msl::Variant* variant = msl::variant(); variant != nullptr) {
-        variant->set_abort_callback(inBackend, inCallback, inCallbackData);
+    if (ggml_backend_reg_t reg = ggml_backend_cpu_reg(); reg != nullptr) {
+        auto set = reinterpret_cast<ggml_backend_set_abort_callback_t>(
+            ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_abort_callback"));
+        set(inBackend, inCallback, inCallbackData);
     }
 }

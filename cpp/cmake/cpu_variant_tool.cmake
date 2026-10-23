@@ -1,16 +1,6 @@
-#[[
-Build-time half of the CPU variants (ggml_cpu_variants.cmake). Run with
-`cmake -P`; LLVM_NM, LLVM_OBJCOPY, LLVM_OBJDUMP and LLVM_AR name the tools.
-
-ACTION=rename  Checks the static library INPUT, then writes it to OUTPUT with
-               every symbol it defines renamed to carry TAG, except constants
-               shared by name. MANGLING is `msvc` or `itanium`. Fails if
-               INPUT holds LTO bitcode, a static initialiser, or an
-               instruction above TAG's level.
-ACTION=check   Fails if any of the static libraries in INPUTS (separated by
-               `|`) holds an instruction above level LEVEL. Disassembles
-               into WORK_DIR.
-]]
+# Run with `cmake -P` by ggml_cpu_variants.cmake (docs/BUILDING.md#cpu-variants).
+# ACTION=rename renames the symbols of INPUT to carry TAG and writes OUTPUT;
+# ACTION=check fails if a library in INPUTS (`|`-separated) goes above LEVEL.
 cmake_minimum_required(VERSION 3.24)
 
 # An instruction is the line's first tab-separated field after the address.
