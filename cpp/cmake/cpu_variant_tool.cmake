@@ -64,11 +64,11 @@ function(check_instructions inLibrary inLevel)
 endfunction()
 
 #[[
-Fails unless every member of `inLibrary` is a native object file without a
-static initialiser. Either would run code before the dispatcher has checked
-the CPU, or let the linker compile code for a level the CPU may lack.
+Fails unless every member of `inLibrary` is a native object file, and sets
+`outHeaders` to its section headers. LTO bitcode has no machine code yet to
+rename or check.
 ]]
-function(check_objects inLibrary)
+function(check_native inLibrary outHeaders)
     execute_process(COMMAND ${LLVM_AR} t ${inLibrary} OUTPUT_VARIABLE members RESULT_VARIABLE result)
 
     if(NOT result EQUAL 0)
@@ -92,8 +92,18 @@ function(check_objects inLibrary)
     if(NOT object_count EQUAL member_count)
         message(FATAL_ERROR
             "${inLibrary} has ${member_count} members but only ${object_count} native object files. The "
-            "others are likely LTO bitcode, which the variants must not be built as.")
+            "others are likely LTO bitcode, which cannot be checked or renamed: build without LTO.")
     endif()
+
+    set(${outHeaders} "${headers}" PARENT_SCOPE)
+endfunction()
+
+#[[
+Fails unless `inLibrary` is native code without a static initialiser, which
+would run before the dispatcher has checked the CPU.
+]]
+function(check_objects inLibrary)
+    check_native(${inLibrary} headers)
 
     string(REGEX MATCHALL "[^\n]+" lines "${headers}")
     set(member "")
@@ -218,6 +228,7 @@ elseif(ACTION STREQUAL "check")
     string(REPLACE "|" ";" libraries "${INPUTS}")
 
     foreach(library IN LISTS libraries)
+        check_native(${library} headers)
         check_instructions(${library} ${LEVEL})
     endforeach()
 else()

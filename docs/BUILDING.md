@@ -65,8 +65,10 @@ commit.
 | `macos-x86_64` | `cpp/build-macos-x86_64` | `CMAKE_OSX_ARCHITECTURES=x86_64`, `MUSCRIPTOR_CPU_VARIANTS=ON`. Needs `llvm-objcopy`, e.g. Homebrew's `llvm` |
 | `windows-x64` | `cpp/build-windows-x64` | `MUSCRIPTOR_CPU_VARIANTS=ON`. Needs clang-cl as `CC` and `CXX` |
 
-All but `fast-cpu` build what ships; the others inherit from `parity`. The
-presets need CMake 3.25 or later, and are run from `cpp/`:
+The platform presets build what ships. `parity` and `fast-cpu` build for
+the host, and on x86-64 that is the fixed baseline
+([x86 instruction sets](#x86-instruction-sets)). All inherit from `parity`.
+The presets need CMake 3.25 or later, and are run from `cpp/`:
 
 ```bash
 cd cpp
@@ -169,10 +171,8 @@ build the CPU can run is chosen when the process first needs it:
 | `x86-64-v2+f16c` | `-march=x86-64-v2 -mavx -mf16c` | v2, plus AVX and F16C | Intel Ivy Bridge, AMD Piledriver, Steamroller and Jaguar |
 | `x86-64-v2` | `-march=x86-64-v2` | SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT, CMPXCHG16B, LAHF/SAHF | Intel Nehalem, Westmere and Sandy Bridge, AMD Bulldozer, Pentium and Celeron models without AVX, and Rosetta by default |
 
-`x86-64-v2` and `x86-64-v3` are the x86-64 psABI levels, checked exactly. In
-between, AVX alone is not a variant: on an F16 checkpoint the matmuls are
-bound by fp16 conversion, which F16C speeds up and AVX does not
-([`PERFORMANCE.md`](PERFORMANCE.md#cpu-variants)).
+`x86-64-v2` and `x86-64-v3` are the x86-64 psABI levels, checked exactly.
+Their speed is in [`PERFORMANCE.md`](PERFORMANCE.md#cpu-variants).
 
 Below `x86-64-v2`, `cpuVariant()` is empty and every load returns
 `Error::UnsupportedCpu` ([`API.md`](API.md#cpu-variant)). AVX counts only when
@@ -195,12 +195,31 @@ How it fits together:
   replaces `ggml-cpu` in `ggml`'s link interface, and ggml's own `ggml-cpu`
   is not built.
 - `MUSCRIPTOR_CPU_VARIANT` set to a variant's name in the environment forces
-  it. `muscriptor_bench --list-devices` prints the one in use.
+  it. `muscriptor_bench --list-devices` prints the one in use:
 
-It needs clang-cl, GCC or Clang, and `llvm-objcopy`, `llvm-nm`, `llvm-objdump`
-and `llvm-ar`, which configuring looks for next to the compiler and on the
-`PATH` (`MUSCRIPTOR_LLVM_OBJCOPY` points it at another toolchain). The option
-is for x86-64 only and excludes `MUSCRIPTOR_NATIVE`.
+  ```bash
+  MUSCRIPTOR_CPU_VARIANT=x86-64-v2 ./cpp/build-macos-x86_64/bench/muscriptor_bench --list-devices
+  ```
+
+  ```powershell
+  $env:MUSCRIPTOR_CPU_VARIANT = "x86-64-v2"
+  .\cpp\build-windows-x64\bench\muscriptor_bench.exe --list-devices
+  ```
+
+It is built with clang-cl on Windows and Clang on macOS, and needs
+`llvm-objcopy`, `llvm-nm`, `llvm-objdump` and `llvm-ar`, which configuring
+looks for next to the compiler and on the `PATH` (`MUSCRIPTOR_LLVM_OBJCOPY`
+points it at another toolchain). The option is for x86-64 only and excludes
+`MUSCRIPTOR_NATIVE`.
+
+On Windows, from a Developer PowerShell for Visual Studio (x64), with LLVM's
+`clang-cl` on the `PATH`:
+
+```powershell
+cd cpp
+$env:CC = "clang-cl"; $env:CXX = "clang-cl"
+cmake --preset windows-x64 && cmake --build --preset windows-x64
+```
 
 Checks, all failing the build:
 
@@ -211,7 +230,8 @@ Checks, all failing the build:
   above the variant's level.
 - **On request.** `cmake --build <dir> --target muscriptor_check_cpu_baseline`
   disassembles every other archive the library links, ggml-vulkan's included,
-  and fails on any instruction above `x86-64-v2`.
+  and fails on any instruction above `x86-64-v2`. It needs a build without
+  LTO, and fails on LTO bitcode, which has no machine code to check.
 
 ### Fixed baseline
 

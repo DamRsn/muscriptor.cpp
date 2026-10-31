@@ -16,7 +16,7 @@ if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     set(MUSCRIPTOR_CPU_EXTRA_FLAGS $<$<COMPILE_LANGUAGE:C>:-Wno-error=incompatible-pointer-types>)
 elseif(MSVC)
     message(FATAL_ERROR
-        "MUSCRIPTOR_CPU_VARIANTS needs clang-cl, GCC or Clang. With cl.exe, configure with "
+        "MUSCRIPTOR_CPU_VARIANTS needs clang-cl on Windows. With cl.exe, configure with "
         "-DMUSCRIPTOR_CPU_VARIANTS=OFF.")
 else()
     set(MUSCRIPTOR_CPU_MANGLING itanium)

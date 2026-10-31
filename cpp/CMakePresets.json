@@ -4,7 +4,7 @@
     {
       "name": "parity",
       "displayName": "Parity (default): fp32 accumulation on ARM",
-      "description": "The build the CPU test tolerances assume. What ships.",
+      "description": "The build the CPU test tolerances assume.",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {

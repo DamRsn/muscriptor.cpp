@@ -246,7 +246,7 @@ if(TARGET ggml-cpu AND NOT MUSCRIPTOR_CPU_VARIANTS AND NOT MUSCRIPTOR_NATIVE)
     if(MUSCRIPTOR_CPU_FLAGS MATCHES "-mavx2|-mfma|-mbmi2|-mavx512|/arch:AVX2|/arch:AVX512")
         message(FATAL_ERROR
             "ggml-cpu compiles with ${MUSCRIPTOR_CPU_FLAGS}. The x86_64 build targets Ivy Bridge, the "
-            "oldest CPU in a Mac that boots macOS 11, and AVX2, BMI2 and FMA all fault there.")
+            "oldest CPU in a Mac that boots macOS 11, and AVX2, BMI2, FMA and AVX-512 all fault there.")
     endif()
 endif()
 
