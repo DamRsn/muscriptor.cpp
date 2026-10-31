@@ -47,7 +47,7 @@ endif()
 #
 # Pinned by full commit. To use a local checkout instead, configure with
 #   -DFETCHCONTENT_SOURCE_DIR_GGML=/path/to/ggml
-set(MUSCRIPTOR_GGML_COMMIT e91ded11bdcd78c42f9c8d3978ff6686eb4c1226)   # v0.23.0
+set(MUSCRIPTOR_GGML_COMMIT b01bbb837ebb3a211e133566324fa7631ee723de)   # v0.23.0 + Metal private-buffer fixes
 
 # No Accelerate/BLAS: ggml-blas is only reached through a backend scheduler, and
 # Model runs a single backend.
@@ -182,7 +182,7 @@ set(GGML_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GGML_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
 FetchContent_Declare(ggml
-    GIT_REPOSITORY https://github.com/ggml-org/ggml.git
+    GIT_REPOSITORY https://github.com/DamRsn/ggml.git
     GIT_TAG        ${MUSCRIPTOR_GGML_COMMIT}
     GIT_SHALLOW    FALSE
 )
