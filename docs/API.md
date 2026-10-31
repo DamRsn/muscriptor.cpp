@@ -66,6 +66,20 @@ which is always last, so the list is never empty. Each `Device` has a `name`
 
 `Transcriber::device()` returns the entry the model actually runs on.
 
+### CPU variant
+
+Every model also runs its conditioning front-end on the CPU, whatever the
+device. On a build with CPU variants ([`BUILDING.md`](BUILDING.md#cpu-variants)),
+`cpuVariant()` names the instruction-set variant the CPU backend uses:
+`"x86-64-v3"`, `"x86-64-v2+f16c"` or `"x86-64-v2"`. It is `"default"` on other
+builds, and empty on a CPU below `x86-64-v2`, where every load returns
+`Error::UnsupportedCpu`.
+
+The `MUSCRIPTOR_CPU_VARIANT` environment variable forces one of the three, for
+tests and benchmarks. A variant the CPU cannot run, or an unknown name, makes
+`cpuVariant()` empty and loads fail the same way, rather than run code the CPU
+cannot execute.
+
 ## Transcribing
 
 ```c++
@@ -228,6 +242,7 @@ starts from a clean state.
 | `InvalidArgument` | Unusable `TranscribeOptions`, e.g. an instrument outside the named groups |
 | `Internal` | A bug in the library |
 | `InvalidResumePoint` | `TranscribeOptions::resume_from` is malformed, or does not match this call's signal and options |
+| `UnsupportedCpu` | The CPU lacks the instruction sets of every CPU variant in the build, or of the one `MUSCRIPTOR_CPU_VARIANT` names ([CPU variant](#cpu-variant)) |
 
 ## Checkpoint format version
 

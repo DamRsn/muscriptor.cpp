@@ -28,6 +28,8 @@ const char* describe(Error inError)
             return "internal error";
         case Error::InvalidResumePoint:
             return "the resume point does not match this transcription";
+        case Error::UnsupportedCpu:
+            return "the CPU lacks an instruction set this build needs";
     }
 
     return "unknown error";

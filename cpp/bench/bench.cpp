@@ -359,6 +359,9 @@ int main(int argc, char** argv)
             }
 
             std::printf("enumerated in %.1f ms\n", enumeration_ms);
+
+            const std::string_view cpu_variant = msl::cpuVariant();
+            std::printf("cpu variant %.*s\n", static_cast<int>(cpu_variant.size()), cpu_variant.data());
             return 0;
         }
 

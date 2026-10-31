@@ -4,7 +4,7 @@
     {
       "name": "parity",
       "displayName": "Parity (default): fp32 accumulation on ARM",
-      "description": "The build the CPU test tolerances assume. What ships.",
+      "description": "The build the CPU test tolerances assume.",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
@@ -35,11 +35,22 @@
     {
       "name": "macos-x86_64",
       "displayName": "macOS x86_64",
-      "description": "Intel slice. Builds on an Intel or an Apple Silicon host.",
+      "description": "Intel slice, with CPU variants. Builds on an Intel or an Apple Silicon host. Needs llvm-objcopy, e.g. from Homebrew's llvm.",
       "inherits": "parity",
       "binaryDir": "${sourceDir}/build-macos-x86_64",
       "cacheVariables": {
-        "CMAKE_OSX_ARCHITECTURES": "x86_64"
+        "CMAKE_OSX_ARCHITECTURES": "x86_64",
+        "MUSCRIPTOR_CPU_VARIANTS": "ON"
+      }
+    },
+    {
+      "name": "windows-x64",
+      "displayName": "Windows x64",
+      "description": "CPU variants, as shipped. Needs clang-cl: set CC and CXX to clang-cl.",
+      "inherits": "parity",
+      "binaryDir": "${sourceDir}/build-windows-x64",
+      "cacheVariables": {
+        "MUSCRIPTOR_CPU_VARIANTS": "ON"
       }
     }
   ],
@@ -59,6 +70,10 @@
     {
       "name": "macos-x86_64",
       "configurePreset": "macos-x86_64"
+    },
+    {
+      "name": "windows-x64",
+      "configurePreset": "windows-x64"
     }
   ]
 }
