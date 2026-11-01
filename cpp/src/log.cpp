@@ -3,6 +3,7 @@
 #include <ggml.h>
 
 #include <mutex>
+#include <string>
 #include <utility>
 
 namespace msl
@@ -70,6 +71,15 @@ void installLogHook()
     // ggml_log_set writes a global with no synchronization of its own, and
     // two threads may load a model at the same time.
     std::call_once(gInstalled, [] { ggml_log_set(forward, nullptr); });
+}
+
+void logMessage(LogLevel inLevel, std::string_view inText)
+{
+    if (!gCallback || inLevel > gMaxLevel) {
+        return;
+    }
+
+    gCallback(inLevel, "muscriptor: " + std::string(inText) + "\n");
 }
 
 } // namespace msl

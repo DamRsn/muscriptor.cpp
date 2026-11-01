@@ -9,9 +9,15 @@
 #include <ggml-cpu.h>
 
 #include <algorithm>
+#include <exception>
+#include <expected>
+#include <functional>
+#include <map>
 #include <mutex>
-#include <set>
+#include <optional>
+#include <span>
 #include <string>
+#include <vector>
 
 #if defined(MUSCRIPTOR_HAS_METAL)
 #include <ggml-metal.h>
@@ -169,34 +175,129 @@ namespace
     }
 
     /**
-     * @return The backend for `inHandle`, or null if it cannot be initialised.
-     *         Call with initBackend's lock held.
+     * ggml's Vulkan device setup is lazily initialised without a lock, both by
+     * a backend's creation and by a device query, and two models may load at
+     * once.
      */
-    ggml_backend_t initHandle(ggml_backend_dev_t inHandle)
+    std::mutex& deviceMutex()
     {
-        if (inHandle == nullptr) {
-            return ggml_backend_cpu_init();
+        static std::mutex mutex;
+        return mutex;
+    }
+
+    /**
+     * Devices that could not be created or initialised, with why. ggml-vulkan
+     * caches a device before creating it, so using one that failed would reach
+     * a half-built device. Guarded by deviceMutex.
+     */
+    std::map<ggml_backend_dev_t, std::string>& failedHandles()
+    {
+        static std::map<ggml_backend_dev_t, std::string> failed;
+        return failed;
+    }
+
+    /** Thrown by firstUnsupportedNode when the query fails to create the device. */
+    struct DeviceCreationFailed {
+        std::string reason;
+    };
+
+    /** @return What a caught exception says, for a log line. */
+    /** Never empty: an empty reason would mark a failed device as created. */
+    std::string reasonOf(const std::exception_ptr& inException)
+    {
+        try {
+            std::rethrow_exception(inException);
+        } catch (const std::exception& e) {
+            if (const char* what = e.what(); what != nullptr && what[0] != '\0') {
+                return what;
+            }
+
+            return "unknown exception";
+        } catch (...) {
+            return "unknown exception";
+        }
+    }
+
+    /** The GPUs in the order Auto tries them: discrete ones, then integrated ones, each in list order. */
+    std::vector<std::size_t> autoOrder(std::span<const Device> inDevices)
+    {
+        std::vector<std::size_t> order;
+
+        for (const bool integrated: {false, true}) {
+            for (std::size_t i = 0; i < inDevices.size(); ++i) {
+                if (inDevices[i].backend != "CPU" && inDevices[i].integrated == integrated) {
+                    order.push_back(i);
+                }
+            }
         }
 
-        // ggml-vulkan caches a device before creating it, so retrying one that
-        // failed would return a half-built device.
-        static std::set<ggml_backend_dev_t> failed;
+        return order;
+    }
 
-        if (failed.contains(inHandle)) {
-            return nullptr;
+    /** A device Auto passes over: created, but missing an op. */
+    bool lacksOp(const DeviceSupport& inSupport)
+    {
+        return inSupport.created() && !inSupport.supported();
+    }
+
+    ggml_backend_dev_t handleOf(std::size_t inIndex)
+    {
+        const Registry& reg = registry();
+        return reg.handles[inIndex] != nullptr ? reg.handles[inIndex]
+                                               : ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0);
+    }
+
+    /** @return Whether device `inIndex` can run the model. Call with deviceMutex held. */
+    DeviceSupport checkDevice(std::size_t inIndex, const SupportCheck& inCheck)
+    {
+        const std::string& name = registry().devices[inIndex].name;
+        ggml_backend_dev_t handle = handleOf(inIndex);
+        std::map<ggml_backend_dev_t, std::string>& failed = failedHandles();
+
+        if (const auto it = failed.find(handle); it != failed.end()) {
+            return {.creation_error = it->second};
         }
+
+        try {
+            DeviceSupport support {.unsupported_op = inCheck(handle)};
+
+            if (support.supported()) {
+                logMessage(LogLevel::Debug, name + " can run the model");
+            } else {
+                logMessage(LogLevel::Info, name + " cannot run " + support.unsupported_op);
+            }
+
+            return support;
+        } catch (const DeviceCreationFailed& e) {
+            logMessage(LogLevel::Warn, "failed to create " + name + " while checking its ops: " + e.reason);
+            failed.emplace(handle, e.reason);
+            return {.creation_error = e.reason};
+        }
+    }
+
+    /**
+     * @return The backend for GPU `inIndex`, which a check found created, or
+     *         why it could not be initialised. Call with deviceMutex held.
+     */
+    std::expected<ggml_backend_t, std::string> initGpu(std::size_t inIndex)
+    {
+        const Registry& reg = registry();
+        ggml_backend_dev_t handle = reg.handles[inIndex];
+        std::string reason = "the backend returned no device";
 
         // Vulkan's device init has no failure path: a device that refuses
         // creation throws.
         try {
-            if (ggml_backend_t backend = ggml_backend_dev_init(inHandle, nullptr); backend != nullptr) {
+            if (ggml_backend_t backend = ggml_backend_dev_init(handle, nullptr); backend != nullptr) {
                 return backend;
             }
         } catch (...) {
+            reason = reasonOf(std::current_exception());
         }
 
-        failed.insert(inHandle);
-        return nullptr;
+        logMessage(LogLevel::Warn, "failed to initialise " + reg.devices[inIndex].name + ": " + reason);
+        failedHandles().emplace(handle, reason);
+        return std::unexpected(reason);
     }
 
 } // namespace
@@ -208,11 +309,26 @@ std::vector<Device> availableDevices()
 
 std::size_t autoDevice(std::span<const Device> inDevices)
 {
-    const auto discrete = std::ranges::find_if(
-        inDevices, [](const Device& inDevice) { return inDevice.backend != "CPU" && !inDevice.integrated; });
+    const std::vector<std::size_t> order = autoOrder(inDevices);
 
-    // GPUs come first, so index 0 is the first GPU, or the CPU when there is none.
-    return discrete != inDevices.end() ? static_cast<std::size_t>(discrete - inDevices.begin()) : 0;
+    // The CPU is always last.
+    return order.empty() ? inDevices.size() - 1 : order.front();
+}
+
+std::size_t autoDevice(std::span<const Device> inDevices, std::span<const std::optional<DeviceSupport>> inSupport)
+{
+    for (const std::size_t i: autoOrder(inDevices)) {
+        if (i >= inSupport.size() || !inSupport[i].has_value() || inSupport[i]->supported()) {
+            return i;
+        }
+
+        // Auto's one GPU attempt.
+        if (!inSupport[i]->created()) {
+            break;
+        }
+    }
+
+    return inDevices.size() - 1;
 }
 
 std::string_view cpuVariant()
@@ -224,22 +340,88 @@ std::string_view cpuVariant()
 #endif
 }
 
-InitialisedBackend initBackend(std::optional<std::size_t> inDevice)
+void requireCpuBackend()
 {
 #if defined(MUSCRIPTOR_CPU_DISPATCH)
-    // Every model needs a CPU backend, for the conditioning front-end at least.
     if (const CpuDispatch& cpu = cpuDispatch(); cpu.name.empty()) {
         throw Exception(Error::UnsupportedCpu, cpu.reason);
     }
-
 #endif
+}
+
+ggml_tensor* firstUnsupportedNode(ggml_backend_dev_t inDevice, ggml_cgraph* inGraph)
+{
+    // A Vulkan query creates the device, which throws if the device refuses.
+    try {
+        for (int i = 0; i < ggml_graph_n_nodes(inGraph); ++i) {
+            if (ggml_tensor* node = ggml_graph_node(inGraph, i); !ggml_backend_dev_supports_op(inDevice, node)) {
+                return node;
+            }
+        }
+    } catch (...) {
+        throw DeviceCreationFailed {reasonOf(std::current_exception())};
+    }
+
+    return nullptr;
+}
+
+std::vector<std::optional<DeviceSupport>> checkDeviceSupport(std::optional<std::size_t> inDevice,
+                                                             const SupportCheck& inCheck)
+{
+    const Registry& reg = registry();
+    std::vector<std::optional<DeviceSupport>> support(reg.devices.size());
+    const std::lock_guard<std::mutex> lock(deviceMutex());
+
+    if (inDevice.has_value()) {
+        if (*inDevice >= reg.devices.size()) {
+            throw Exception(Error::DeviceUnavailable, "no device at index " + std::to_string(*inDevice));
+        }
+
+        support[*inDevice] = checkDevice(*inDevice, inCheck);
+        return support;
+    }
+
+    for (const std::size_t i: autoOrder(reg.devices)) {
+        support[i] = checkDevice(i, inCheck);
+
+        if (!lacksOp(*support[i])) {
+            return support;
+        }
+    }
+
+    support.back() = checkDevice(reg.devices.size() - 1, inCheck);
+    return support;
+}
+
+InitialisedBackend initBackend(std::optional<std::size_t> inDevice, const SupportCheck& inCheck)
+{
     const Registry& reg = registry();
     const std::size_t cpu = reg.devices.size() - 1;
+    const std::lock_guard<std::mutex> lock(deviceMutex());
 
-    // ggml's Vulkan device setup is lazily initialised without a lock, and two
-    // models may load at once.
-    static std::mutex mutex;
-    const std::lock_guard<std::mutex> lock(mutex);
+    // Why device `inIndex` cannot be used, or empty when it can.
+    const auto unusable = [&](std::size_t inIndex, const DeviceSupport& inSupport) -> std::string {
+        const std::string& name = reg.devices[inIndex].name;
+        return !inSupport.created()     ? name + " could not be created: " + inSupport.creation_error
+               : !inSupport.supported() ? name + " cannot run " + inSupport.unsupported_op
+                                        : std::string();
+    };
+
+    const auto init = [&](std::size_t inIndex) -> std::expected<ggml_backend_t, std::string> {
+        if (reg.handles[inIndex] == nullptr) {
+            if (ggml_backend_t backend = ggml_backend_cpu_init(); backend != nullptr) {
+                return backend;
+            }
+
+            return std::unexpected(std::string("failed to initialise the CPU backend"));
+        }
+
+        if (auto backend = initGpu(inIndex); backend.has_value()) {
+            return backend;
+        } else {
+            return std::unexpected("failed to initialise " + reg.devices[inIndex].name + ": " + backend.error());
+        }
+    };
 
     if (inDevice.has_value()) {
         const std::size_t index = *inDevice;
@@ -248,21 +430,52 @@ InitialisedBackend initBackend(std::optional<std::size_t> inDevice)
             throw Exception(Error::DeviceUnavailable, "no device at index " + std::to_string(index));
         }
 
-        if (ggml_backend_t backend = initHandle(reg.handles[index]); backend != nullptr) {
-            return {backend, reg.devices[index]};
+        if (const std::string reason = unusable(index, checkDevice(index, inCheck)); !reason.empty()) {
+            throw Exception(Error::DeviceUnavailable, reason);
         }
 
-        throw Exception(Error::DeviceUnavailable, "failed to initialise " + reg.devices[index].name);
-    }
-
-    if (const std::size_t pick = autoDevice(reg.devices); pick != cpu) {
-        if (ggml_backend_t backend = initHandle(reg.handles[pick]); backend != nullptr) {
-            return {backend, reg.devices[pick]};
+        if (auto backend = init(index); backend.has_value()) {
+            return {*backend, reg.devices[index]};
+        } else {
+            throw Exception(Error::DeviceUnavailable, backend.error());
         }
     }
 
-    if (ggml_backend_t backend = initHandle(nullptr); backend != nullptr) {
-        return {backend, reg.devices[cpu]};
+    // Passes over the GPUs that lack an op, and makes one GPU attempt, as
+    // autoDevice(devices, support) describes.
+    const std::vector<std::size_t> order = autoOrder(reg.devices);
+    std::string fallback = "no GPU can run the model";
+
+    for (const std::size_t i: order) {
+        const DeviceSupport support = checkDevice(i, inCheck);
+
+        if (lacksOp(support)) {
+            continue;
+        }
+
+        if (!support.created()) {
+            fallback = unusable(i, support);
+            break;
+        }
+
+        if (auto backend = init(i); backend.has_value()) {
+            return {*backend, reg.devices[i]};
+        } else {
+            fallback = backend.error();
+            break;
+        }
+    }
+
+    if (!order.empty()) {
+        logMessage(LogLevel::Info, "Auto falls back to the CPU: " + fallback);
+    }
+
+    if (const std::string reason = unusable(cpu, checkDevice(cpu, inCheck)); !reason.empty()) {
+        throw Exception(Error::DeviceUnavailable, reason);
+    }
+
+    if (auto backend = init(cpu); backend.has_value()) {
+        return {*backend, reg.devices[cpu]};
     }
 
     throw Exception(Error::OutOfMemory, "failed to initialise the CPU backend");

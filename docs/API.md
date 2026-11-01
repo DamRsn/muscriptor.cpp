@@ -41,11 +41,33 @@ called on the loading thread, cover it:
 `LoadOptions::device` picks where the model runs:
 
 - **Empty, the default: Auto.** The first discrete GPU, otherwise the first
-  integrated GPU, and the CPU when there is no GPU or it fails to initialise.
-  `autoDevice(devices)` says which one that is before loading.
+  integrated GPU, among those that can run the checkpoint, and the CPU when
+  there is none or it fails to initialise. `autoDevice(devices, support)` says
+  which one that is before loading.
 - **An index into `availableDevices()`.** A requirement, not a request: if
-  that device fails to initialise, or the index is out of range, `load`
-  returns `Error::DeviceUnavailable` rather than running somewhere else.
+  that device cannot run the checkpoint, fails to initialise, or the index is
+  out of range, `load` returns `Error::DeviceUnavailable` rather than running
+  somewhere else.
+
+Whether a device can run the checkpoint is decided before any weight is
+uploaded: `load` builds the model's graphs and asks the backend of each device
+it tries about every op in them. A GPU can lack an op the model needs
+(ggml-metal runs no matmul without SIMD-group reductions, which it finds only
+on Apple7-family and Metal 3 GPUs), and running it anyway would abort the
+process. Auto passes over such a GPU, and makes one GPU attempt.
+
+`Transcriber::checkDevices(path, device)` makes the check `load` with the same
+`device` would make, without loading anything: the named device, or for Auto
+the GPUs in Auto order up to the first one that is supported or could not be
+created, then the CPU if every GPU lacks an op. On Vulkan, checking a GPU
+creates ggml's device for it, so a host that checks only the devices it will
+use touches no other GPU. Each checked device gets a `DeviceSupport`:
+`unsupported_op` names the first op it cannot run, e.g. `"MUL_MAT (f16, f32)"`,
+and `creation_error` says why it could not be created or initialised. A device
+that failed once is never retried in the process, so a check after a failed
+load reports it too. A device not checked gets an empty entry.
+`autoDevice(devices, support)` names the device Auto runs on as far as the
+check knows: the CPU when the GPU it would try could not be created.
 
 `availableDevices()` lists the GPUs in the backend's own order, then the CPU,
 which is always last, so the list is never empty. Each `Device` has a `name`
@@ -236,7 +258,7 @@ starts from a clean state.
 | `UnsupportedArch` | Audio framing other than 16 kHz / 100 Hz / hop 160, or inconsistent attention geometry |
 | `UnsupportedCheckpointVersion` | A GGUF with a different `muscriptor.format_version`, or none, as in a GGUF of another model |
 | `OutOfMemory` | Allocation failed, or no backend could be initialised |
-| `DeviceUnavailable` | `LoadOptions::device` is out of range, or that device failed to initialise |
+| `DeviceUnavailable` | `LoadOptions::device` is out of range, or that device cannot run the checkpoint or failed to initialise; or, under Auto, not even the CPU can run it |
 | `ContextOverflow` | A chunk's prefix plus its forced prompt does not fit in the KV cache |
 | `Cancelled` | A `should_cancel` predicate returned `true`, or the note callback returned `false` |
 | `InvalidArgument` | Unusable `TranscribeOptions`, e.g. an instrument outside the named groups |
@@ -255,8 +277,9 @@ directory named after it (`v1/`).
 
 ## Logging
 
-The library prints nothing. ggml's log output is routed through a sink that is
-silent by default:
+The library prints nothing. ggml's log output, and the library's own messages
+(why a device was passed over, and the reason behind every error a call
+returns except `Cancelled`, prefixed `muscriptor: `), go through a sink that is silent by default:
 
 ```c++
 msl::setLogCallback([](msl::LogLevel level, std::string_view text) { myLog(level, text); },

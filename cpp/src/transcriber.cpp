@@ -2,13 +2,16 @@
 
 #include "muscriptor/model.hpp"
 
+#include "format.hpp"
 #include "instrument_groups.hpp"
+#include "log.hpp"
 #include "note_assembler.hpp"
 #include "open_note_tracker.hpp"
 #include "resume_point.hpp"
 #include "vocabulary.hpp"
 
 #include <algorithm>
+#include <exception>
 #include <iterator>
 #include <new>
 #include <optional>
@@ -38,6 +41,9 @@ namespace
     {
         return 1 + Transcriber::SEGMENT_SAMPLES / inHopLength;
     }
+
+    /** The KV positions `load` allocates. The hparams are checked against these constants after loading. */
+    constexpr int CHUNK_CONTEXT = requiredContext(melFramesPerChunk(Transcriber::SAMPLE_RATE / Vocabulary::FRAME_RATE));
 
     /** The selection, with duplicates removed but the caller's order kept. */
     std::vector<InstrumentGroup> uniqueInstruments(std::span<const InstrumentGroup> inGroups)
@@ -95,24 +101,25 @@ public:
 
 private:
     /**
-     * Configure the model from `inOptions`. Returns false on a bad selection,
-     * having touched nothing -- the model is left as the previous call
-     * configured it, and the next call reconfigures it from scratch anyway.
+     * Configure the model from `inOptions`. Throws `Error::InvalidArgument` on
+     * a bad selection, having touched nothing -- the model is left as the
+     * previous call configured it, and the next call reconfigures it from
+     * scratch anyway.
      */
-    bool _configure(const TranscribeOptions& inOptions);
+    void _configure(const TranscribeOptions& inOptions);
 
     /** One chunk's samples, zero-padded to a full segment. */
     void _fillChunk(std::span<const float> inSamples, int inIndex);
 
     /**
      * Rebuild the decode state `inResumePoint` describes, after `_configure`.
-     * @return The chunk to continue from, or nothing if the point does not fit
-     *         this call.
+     * @return The chunk to continue from. Throws `Error::InvalidResumePoint`
+     *         if the point does not fit this call.
      */
-    std::optional<int> _restore(std::string_view inResumePoint,
-                                std::size_t inNSamples,
-                                const TranscribeOptions& inOptions,
-                                int inNChunks);
+    int _restore(std::string_view inResumePoint,
+                 std::size_t inNSamples,
+                 const TranscribeOptions& inOptions,
+                 int inNChunks);
 
     /** The resume point for right after chunk `inDecoded - 1`. */
     std::string _resumePoint(std::size_t inNSamples, const TranscribeOptions& inOptions, int inDecoded) const;
@@ -126,13 +133,14 @@ private:
     std::vector<InstrumentGroup> mInstruments;
 };
 
-bool Transcriber::Impl::_configure(const TranscribeOptions& inOptions)
+void Transcriber::Impl::_configure(const TranscribeOptions& inOptions)
 {
     mInstruments = uniqueInstruments(inOptions.instruments);
 
     for (const InstrumentGroup group: mInstruments) {
         if (instrumentName(group).empty()) {
-            return false;
+            throw Exception(Error::InvalidArgument,
+                            msl::format("instrument group {} is not a named group", static_cast<int>(group)));
         }
     }
 
@@ -147,20 +155,23 @@ bool Transcriber::Impl::_configure(const TranscribeOptions& inOptions)
     } else {
         mModel.setForbiddenTokens(InstrumentGroups::forbiddenTokenIds(mInstruments));
     }
-
-    return true;
 }
 
-std::optional<int> Transcriber::Impl::_restore(std::string_view inResumePoint,
-                                               std::size_t inNSamples,
-                                               const TranscribeOptions& inOptions,
-                                               int inNChunks)
+int Transcriber::Impl::_restore(std::string_view inResumePoint,
+                                std::size_t inNSamples,
+                                const TranscribeOptions& inOptions,
+                                int inNChunks)
 {
     std::optional<ResumeState> state = parseResumeState(inResumePoint);
 
-    if (!state || state->n_samples != inNSamples || state->prelude_forcing != inOptions.prelude_forcing
+    if (!state) {
+        throw Exception(Error::InvalidResumePoint, "malformed resume point");
+    }
+
+    if (state->n_samples != inNSamples || state->prelude_forcing != inOptions.prelude_forcing
         || state->instruments != mInstruments || state->decoded > inNChunks) {
-        return std::nullopt;
+        throw Exception(Error::InvalidResumePoint,
+                        "resume point made for another signal, selection or prelude setting");
     }
 
     const int last = state->decoded - 1;
@@ -229,21 +240,13 @@ std::expected<std::vector<Note>, Error> Transcriber::Impl::transcribe(std::span<
     mTracker.reset();
     mAssembler.reset();
 
-    if (!_configure(inOptions)) {
-        return std::unexpected(Error::InvalidArgument);
-    }
+    _configure(inOptions);
 
     const int n_chunks = Transcriber::chunkCount(inSamples.size());
     int first_chunk = 0;
 
     if (!inOptions.resume_from.empty()) {
-        const std::optional<int> resumed = _restore(inOptions.resume_from, inSamples.size(), inOptions, n_chunks);
-
-        if (!resumed) {
-            return std::unexpected(Error::InvalidResumePoint);
-        }
-
-        first_chunk = *resumed;
+        first_chunk = _restore(inOptions.resume_from, inSamples.size(), inOptions, n_chunks);
     }
 
     const ScopedCancel scoped_cancel(mModel, inOptions.should_cancel);
@@ -286,7 +289,13 @@ std::expected<std::vector<Note>, Error> Transcriber::Impl::transcribe(std::span<
         const int budget = mModel.contextSize() - prefix - 1;
 
         if (budget <= static_cast<int>(prompt.size())) {
-            return std::unexpected(Error::ContextOverflow);
+            throw Exception(
+                Error::ContextOverflow,
+                msl::format("chunk {}: a {}-token prompt leaves no room after a {}-row prefix in a {}-position context",
+                            chunk,
+                            prompt.size(),
+                            prefix,
+                            mModel.contextSize()));
         }
 
         const int max_tokens = std::min(Transcriber::MAX_TOKENS_PER_CHUNK, budget);
@@ -351,6 +360,41 @@ std::expected<std::vector<Note>, Error> Transcriber::Impl::transcribe(std::span<
 // Transcriber
 // ---------------------------------------------------------------------------
 
+namespace
+{
+
+    /**
+     * @return The error a caught exception carries, after logging what it says:
+     *         the returned code alone does not say why `inCall` failed.
+     */
+    Error caught(std::string_view inCall, const std::exception_ptr& inException)
+    {
+        Error error = Error::Internal;
+        std::string reason;
+
+        try {
+            std::rethrow_exception(inException);
+        } catch (const Exception& e) {
+            error = e.error();
+            reason = e.what();
+        } catch (const std::bad_alloc& e) {
+            error = Error::OutOfMemory;
+            reason = e.what();
+        } catch (const std::exception& e) {
+            reason = e.what();
+        } catch (...) {
+            reason = "unknown exception";
+        }
+
+        if (error != Error::Cancelled) {
+            logMessage(LogLevel::Error, msl::format("{} failed ({}): {}", inCall, describe(error), reason));
+        }
+
+        return error;
+    }
+
+} // namespace
+
 Transcriber::Transcriber() = default;
 Transcriber::~Transcriber() = default;
 Transcriber::Transcriber(Transcriber&&) noexcept = default;
@@ -368,8 +412,7 @@ std::expected<Transcriber, Error> Transcriber::load(const std::filesystem::path&
         options.device = inOptions.device;
         options.should_cancel = std::move(inOptions.should_cancel);
         options.on_progress = std::move(inOptions.on_progress);
-        // The hparams are checked against these constants below.
-        options.n_ctx = requiredContext(melFramesPerChunk(SAMPLE_RATE / Vocabulary::FRAME_RATE));
+        options.n_ctx = CHUNK_CONTEXT;
 
         Model model = Model::load(inGgufPath, options);
         const Hparams& hp = model.hparams();
@@ -378,18 +421,29 @@ std::expected<Transcriber, Error> Transcriber::load(const std::filesystem::path&
         // segment length and into the decode state machine's tick arithmetic.
         if (hp.sample_rate != SAMPLE_RATE || hp.frame_rate != Vocabulary::FRAME_RATE
             || hp.hop_length != SAMPLE_RATE / Vocabulary::FRAME_RATE) {
-            return std::unexpected(Error::UnsupportedArch);
+            throw Exception(
+                Error::UnsupportedArch,
+                msl::format("audio framing {} Hz, {} frames/s, hop {}", hp.sample_rate, hp.frame_rate, hp.hop_length));
         }
 
         Transcriber transcriber;
         transcriber.mImpl = std::make_unique<Impl>(std::move(model));
         return transcriber;
-    } catch (const Exception& e) {
-        return std::unexpected(e.error());
-    } catch (const std::bad_alloc&) {
-        return std::unexpected(Error::OutOfMemory);
-    } catch (const std::exception&) {
-        return std::unexpected(Error::Internal);
+    } catch (...) {
+        return std::unexpected(caught("load", std::current_exception()));
+    }
+}
+
+std::expected<std::vector<std::optional<DeviceSupport>>, Error>
+    Transcriber::checkDevices(const std::filesystem::path& inGgufPath, std::optional<std::size_t> inDevice)
+{
+    try {
+        ModelOptions options;
+        options.device = inDevice;
+        options.n_ctx = CHUNK_CONTEXT;
+        return Model::checkDevices(inGgufPath, options);
+    } catch (...) {
+        return std::unexpected(caught("checkDevices", std::current_exception()));
     }
 }
 
@@ -404,12 +458,8 @@ std::expected<std::vector<Note>, Error> Transcriber::transcribe(std::span<const 
 {
     try {
         return mImpl->transcribe(inSamples, inOptions, inCallback);
-    } catch (const Exception& e) {
-        return std::unexpected(e.error());
-    } catch (const std::bad_alloc&) {
-        return std::unexpected(Error::OutOfMemory);
-    } catch (const std::exception&) {
-        return std::unexpected(Error::Internal);
+    } catch (...) {
+        return std::unexpected(caught("transcribe", std::current_exception()));
     }
 }
 

@@ -48,7 +48,7 @@ namespace
 
 } // namespace
 
-GgufFile::GgufFile(const std::filesystem::path& inPath, ggml_backend_t inBackend, const UploadObserver& inObserver)
+GgufFile::GgufFile(const std::filesystem::path& inPath)
     : mPath(inPath)
 {
     // Existence is checked separately because gguf_init_from_file answers null
@@ -70,49 +70,58 @@ GgufFile::GgufFile(const std::filesystem::path& inPath, ggml_backend_t inBackend
     if (mGguf == nullptr) {
         throw Exception(Error::InvalidCheckpoint, msl::format("not a readable GGUF file: {}", utf8(inPath)));
     }
+}
 
-    // A throwing constructor never runs the destructor, so free what is held.
-    try {
-        mBuffer = ggml_backend_alloc_ctx_tensors(mCtx, inBackend);
+// Delegating: once the metadata constructor has returned, a throwing upload
+// runs the destructor, which frees what is held.
+GgufFile::GgufFile(const std::filesystem::path& inPath, ggml_backend_t inBackend, const UploadObserver& inObserver)
+    : GgufFile(inPath)
+{
+    upload(inBackend, inObserver);
+}
 
-        if (mBuffer == nullptr) {
-            throw Exception(Error::OutOfMemory, msl::format("failed to allocate tensors for: {}", utf8(inPath)));
-        }
+void GgufFile::upload(ggml_backend_t inBackend, const UploadObserver& inObserver)
+{
+    if (mBuffer != nullptr) {
+        throw Exception(Error::Internal, msl::format("{} is already uploaded", utf8(mPath.filename())));
+    }
 
-        std::ifstream file(inPath, std::ios::binary);
+    mBuffer = ggml_backend_alloc_ctx_tensors(mCtx, inBackend);
 
-        if (!file) {
-            throw Exception(Error::FileNotFound, msl::format("failed to reopen GGUF file: {}", utf8(inPath)));
-        }
+    if (mBuffer == nullptr) {
+        throw Exception(Error::OutOfMemory, msl::format("failed to allocate tensors for: {}", utf8(mPath)));
+    }
 
-        const std::int64_t n_tensors = gguf_get_n_tensors(mGguf);
-        std::size_t bytes_total = 0;
+    std::ifstream file(mPath, std::ios::binary);
 
-        for (std::int64_t i = 0; i < n_tensors; ++i) {
-            bytes_total += ggml_nbytes(ggml_get_tensor(mCtx, gguf_get_tensor_name(mGguf, i)));
-        }
+    if (!file) {
+        throw Exception(Error::FileNotFound, msl::format("failed to reopen GGUF file: {}", utf8(mPath)));
+    }
 
-        std::size_t bytes_done = 0;
+    const std::int64_t n_tensors = gguf_get_n_tensors(mGguf);
+    std::size_t bytes_total = 0;
+
+    for (std::int64_t i = 0; i < n_tensors; ++i) {
+        bytes_total += ggml_nbytes(ggml_get_tensor(mCtx, gguf_get_tensor_name(mGguf, i)));
+    }
+
+    std::size_t bytes_done = 0;
+
+    if (inObserver) {
+        inObserver(bytes_done, bytes_total);
+    }
+
+    for (std::int64_t i = 0; i < n_tensors; ++i) {
+        const char* name = gguf_get_tensor_name(mGguf, i);
+        ggml_tensor* tensor = ggml_get_tensor(mCtx, name);
+        const std::size_t offset = gguf_get_data_offset(mGguf) + gguf_get_tensor_offset(mGguf, i);
+        uploadTensorData(file, offset, tensor);
+
+        bytes_done += ggml_nbytes(tensor);
 
         if (inObserver) {
             inObserver(bytes_done, bytes_total);
         }
-
-        for (std::int64_t i = 0; i < n_tensors; ++i) {
-            const char* name = gguf_get_tensor_name(mGguf, i);
-            ggml_tensor* tensor = ggml_get_tensor(mCtx, name);
-            const std::size_t offset = gguf_get_data_offset(mGguf) + gguf_get_tensor_offset(mGguf, i);
-            uploadTensorData(file, offset, tensor);
-
-            bytes_done += ggml_nbytes(tensor);
-
-            if (inObserver) {
-                inObserver(bytes_done, bytes_total);
-            }
-        }
-    } catch (...) {
-        _release();
-        throw;
     }
 }
 

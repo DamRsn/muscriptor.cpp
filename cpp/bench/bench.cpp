@@ -345,20 +345,54 @@ int main(int argc, char** argv)
         const double enumeration_ms = millisSince(enumeration_began);
 
         if (args.list_devices) {
-            const std::size_t auto_device = msl::autoDevice(devices);
+            // Every device, each checked on its own, against the weights when
+            // they are there; the listing needs none.
+            const Clock::time_point check_began = Clock::now();
+            std::expected<std::vector<std::optional<msl::DeviceSupport>>, msl::Error> support =
+                std::vector<std::optional<msl::DeviceSupport>>(devices.size());
+
+            for (std::size_t i = 0; i < devices.size() && support.has_value(); ++i) {
+                if (auto checked = msl::Transcriber::checkDevices(args.weights, i); checked.has_value()) {
+                    (*support)[i] = (*checked)[i];
+                } else {
+                    support = std::unexpected(checked.error());
+                }
+            }
+
+            const double check_ms = millisSince(check_began);
+
+            const std::size_t auto_device =
+                support.has_value() ? msl::autoDevice(devices, *support) : msl::autoDevice(devices);
 
             for (std::size_t i = 0; i < devices.size(); ++i) {
                 const msl::Device& device = devices[i];
-                std::printf("%2zu  %-6s  %-10s  %8.2f GB  %s%s\n",
+                const std::optional<msl::DeviceSupport> checked =
+                    support.has_value() ? (*support)[i] : std::optional<msl::DeviceSupport> {};
+                const std::string unsupported = !checked.has_value() || checked->supported() ? ""
+                                                : !checked->created()
+                                                    ? "  could not be created: " + checked->creation_error
+                                                    : "  cannot run " + checked->unsupported_op;
+                std::printf("%2zu  %-6s  %-10s  %8.2f GB  %s%s%s\n",
                             i,
                             device.backend.c_str(),
                             device.integrated ? "integrated" : "",
                             static_cast<double>(device.memory_total) / 1e9,
                             device.name.c_str(),
-                            i == auto_device ? "  [auto]" : "");
+                            i == auto_device ? "  [auto]" : "",
+                            unsupported.c_str());
             }
 
             std::printf("enumerated in %.1f ms\n", enumeration_ms);
+
+            if (support.has_value()) {
+                std::printf("checked against %s in %.1f ms\n", args.weights.filename().string().c_str(), check_ms);
+            }
+
+            else {
+                std::printf("not checked against %s: %s\n",
+                            args.weights.filename().string().c_str(),
+                            msl::describe(support.error()));
+            }
 
             const std::string_view cpu_variant = msl::cpuVariant();
             std::printf("cpu variant %.*s\n", static_cast<int>(cpu_variant.size()), cpu_variant.data());

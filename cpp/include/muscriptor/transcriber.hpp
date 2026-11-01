@@ -65,10 +65,11 @@ struct TranscribeOptions {
 /** Options fixed at load: they decide where the weights and KV cache live. */
 struct LoadOptions {
     /**
-     * Index into `availableDevices()`, or empty for Auto: `autoDevice`'s pick,
-     * falling back to the CPU. An explicit device that fails makes `load`
-     * return `Error::DeviceUnavailable`. `Transcriber::device` reports where
-     * the model runs. CPU and GPU results are not bit-identical.
+     * Index into `availableDevices()`, or empty for Auto: the GPU
+     * `autoDevice(devices, support)` names, falling back to the CPU. An
+     * explicit device that cannot run the checkpoint or fails to initialise
+     * makes `load` return `Error::DeviceUnavailable`. `Transcriber::device`
+     * reports where the model runs. CPU and GPU results are not bit-identical.
      */
     std::optional<std::size_t> device;
 
@@ -161,6 +162,24 @@ public:
     static constexpr int MAX_TOKENS_PER_CHUNK = 2000;
 
     static std::expected<Transcriber, Error> load(const std::filesystem::path& inGgufPath, LoadOptions inOptions = {});
+
+    /**
+     * Which devices can run a checkpoint, from its metadata alone: no weight is
+     * read. Checks the devices `load` with this `inDevice` would check: that
+     * device, or for Auto the GPUs in Auto order up to the first one that is
+     * supported or could not be created, and the CPU when every GPU is
+     * unsupported. On Vulkan, checking a GPU
+     * sets up ggml's device for it, as a load would. Thread-safe.
+     *
+     * @param inDevice As `LoadOptions::device`.
+     * @return One entry per device of `availableDevices()`, in the same order,
+     *         empty for a device not checked. Fails
+     *         on a missing or unreadable checkpoint, an unsupported CPU and an
+     *         index out of range, with the errors `load` returns; the other
+     *         reasons `load` can reject a checkpoint are not checked.
+     */
+    static std::expected<std::vector<std::optional<DeviceSupport>>, Error>
+        checkDevices(const std::filesystem::path& inGgufPath, std::optional<std::size_t> inDevice = std::nullopt);
 
     /** @return The device the model runs on, as listed by `availableDevices()`. */
     const Device& device() const;

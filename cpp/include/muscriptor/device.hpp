@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -25,6 +26,24 @@ struct Device {
 };
 
 /**
+ * Whether a device can run a checkpoint's model, as its backend reports for
+ * each op of the model's graphs. See `Transcriber::checkDevices`.
+ */
+struct DeviceSupport {
+    /** The first op the device cannot run, e.g. `"MUL_MAT (f16, f32)"`; empty when it runs them all. */
+    std::string unsupported_op;
+
+    /**
+     * Why the device could not be created or initialised, then or earlier in
+     * the process; empty when it was. A device that failed is never retried.
+     */
+    std::string creation_error;
+
+    bool created() const { return creation_error.empty(); }
+    bool supported() const { return created() && unsupported_op.empty(); }
+};
+
+/**
  * The devices this build can run on, GPUs first in the backend's own order,
  * the CPU always last, so the list is never empty.
  *
@@ -36,13 +55,26 @@ struct Device {
 std::vector<Device> availableDevices();
 
 /**
- * The device `LoadOptions::device` left empty resolves to: the first discrete
- * GPU, otherwise the first integrated GPU, otherwise the CPU.
+ * The device Auto tries when every GPU can run the checkpoint: the first
+ * discrete GPU, otherwise the first integrated GPU, otherwise the CPU. Once
+ * the checkpoint is known, prefer the overload that takes its support.
  *
  * @param inDevices A list from `availableDevices`.
  * @return An index into `inDevices`.
  */
 std::size_t autoDevice(std::span<const Device> inDevices);
+
+/**
+ * The device `LoadOptions::device` left empty runs on, as far as `inSupport`
+ * knows: as `autoDevice(inDevices)`, passing over the GPUs that cannot run an
+ * op, and the CPU when the GPU it would try could not be created. A GPU not
+ * checked counts as able to run the model.
+ *
+ * @param inDevices A list from `availableDevices`.
+ * @param inSupport From `Transcriber::checkDevices`, one entry per device.
+ * @return An index into `inDevices`.
+ */
+std::size_t autoDevice(std::span<const Device> inDevices, std::span<const std::optional<DeviceSupport>> inSupport);
 
 /**
  * The instruction-set variant of the CPU backend this process runs. On an
