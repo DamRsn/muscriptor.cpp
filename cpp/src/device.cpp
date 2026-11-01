@@ -9,7 +9,9 @@
 #include <ggml-cpu.h>
 
 #include <algorithm>
+#include <functional>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 
@@ -126,8 +128,30 @@ namespace
     }
 
     /**
+     * ggml's Vulkan device setup is lazily initialised without a lock, both by
+     * a backend's creation and by a device query, and two models may load at
+     * once.
+     */
+    std::mutex& deviceMutex()
+    {
+        static std::mutex mutex;
+        return mutex;
+    }
+
+    /**
+     * Devices whose creation threw. ggml-vulkan caches a device before
+     * creating it, so using one that failed would reach a half-built device.
+     * Guarded by deviceMutex.
+     */
+    std::set<ggml_backend_dev_t>& failedHandles()
+    {
+        static std::set<ggml_backend_dev_t> failed;
+        return failed;
+    }
+
+    /**
      * @return The backend for `inHandle`, or null if it cannot be initialised.
-     *         Call with initBackend's lock held.
+     *         Call with deviceMutex held.
      */
     ggml_backend_t initHandle(ggml_backend_dev_t inHandle)
     {
@@ -135,9 +159,7 @@ namespace
             return ggml_backend_cpu_init();
         }
 
-        // ggml-vulkan caches a device before creating it, so retrying one that
-        // failed would return a half-built device.
-        static std::set<ggml_backend_dev_t> failed;
+        std::set<ggml_backend_dev_t>& failed = failedHandles();
 
         if (failed.contains(inHandle)) {
             return nullptr;
@@ -172,6 +194,28 @@ std::size_t autoDevice(std::span<const Device> inDevices)
     return discrete != inDevices.end() ? static_cast<std::size_t>(discrete - inDevices.begin()) : 0;
 }
 
+std::size_t autoDevice(std::span<const Device> inDevices, std::span<const DeviceSupport> inSupport)
+{
+    std::optional<std::size_t> first_gpu;
+
+    for (std::size_t i = 0; i < inDevices.size(); ++i) {
+        if (inDevices[i].backend == "CPU" || i >= inSupport.size() || !inSupport[i].supported()) {
+            continue;
+        }
+
+        if (!inDevices[i].integrated) {
+            return i;
+        }
+
+        if (!first_gpu.has_value()) {
+            first_gpu = i;
+        }
+    }
+
+    // The CPU is always last.
+    return first_gpu.value_or(inDevices.size() - 1);
+}
+
 std::string_view cpuVariant()
 {
 #if defined(MUSCRIPTOR_CPU_DISPATCH)
@@ -181,22 +225,66 @@ std::string_view cpuVariant()
 #endif
 }
 
-InitialisedBackend initBackend(std::optional<std::size_t> inDevice)
+void requireCpuBackend()
 {
 #if defined(MUSCRIPTOR_CPU_DISPATCH)
-    // Every model needs a CPU backend, for the conditioning front-end at least.
     if (const CpuDispatch& cpu = cpuDispatch(); cpu.name.empty()) {
         throw Exception(Error::UnsupportedCpu, cpu.reason);
     }
-
 #endif
+}
+
+std::vector<DeviceSupport>
+    checkDeviceSupport(const std::function<std::string(ggml_backend_dev_t inDevice)>& inFirstUnsupportedOp)
+{
+    requireCpuBackend();
+
+    const Registry& reg = registry();
+    std::vector<DeviceSupport> support(reg.devices.size());
+
+    const std::lock_guard<std::mutex> lock(deviceMutex());
+    std::set<ggml_backend_dev_t>& failed = failedHandles();
+
+    for (std::size_t i = 0; i < reg.devices.size(); ++i) {
+        ggml_backend_dev_t handle =
+            reg.handles[i] != nullptr ? reg.handles[i] : ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0);
+
+        if (failed.contains(handle)) {
+            continue;
+        }
+
+        // A Vulkan query creates the device, which throws if the device
+        // refuses.
+        try {
+            support[i].unsupported_op = inFirstUnsupportedOp(handle);
+        } catch (...) {
+            failed.insert(handle);
+        }
+    }
+
+    return support;
+}
+
+InitialisedBackend initBackend(std::optional<std::size_t> inDevice, std::span<const DeviceSupport> inSupport)
+{
+    // Every model needs a CPU backend, for the conditioning front-end at least.
+    requireCpuBackend();
+
     const Registry& reg = registry();
     const std::size_t cpu = reg.devices.size() - 1;
 
-    // ggml's Vulkan device setup is lazily initialised without a lock, and two
-    // models may load at once.
-    static std::mutex mutex;
-    const std::lock_guard<std::mutex> lock(mutex);
+    if (inSupport.size() != reg.devices.size()) {
+        throw Exception(Error::Internal, "device support does not match the device list");
+    }
+
+    const auto require_support = [&](std::size_t inIndex) {
+        if (!inSupport[inIndex].supported()) {
+            throw Exception(Error::DeviceUnavailable,
+                            reg.devices[inIndex].name + " cannot run " + inSupport[inIndex].unsupported_op);
+        }
+    };
+
+    const std::lock_guard<std::mutex> lock(deviceMutex());
 
     if (inDevice.has_value()) {
         const std::size_t index = *inDevice;
@@ -205,6 +293,8 @@ InitialisedBackend initBackend(std::optional<std::size_t> inDevice)
             throw Exception(Error::DeviceUnavailable, "no device at index " + std::to_string(index));
         }
 
+        require_support(index);
+
         if (ggml_backend_t backend = initHandle(reg.handles[index]); backend != nullptr) {
             return {backend, reg.devices[index]};
         }
@@ -212,11 +302,13 @@ InitialisedBackend initBackend(std::optional<std::size_t> inDevice)
         throw Exception(Error::DeviceUnavailable, "failed to initialise " + reg.devices[index].name);
     }
 
-    if (const std::size_t pick = autoDevice(reg.devices); pick != cpu) {
+    if (const std::size_t pick = autoDevice(reg.devices, inSupport); pick != cpu) {
         if (ggml_backend_t backend = initHandle(reg.handles[pick]); backend != nullptr) {
             return {backend, reg.devices[pick]};
         }
     }
+
+    require_support(cpu);
 
     if (ggml_backend_t backend = initHandle(nullptr); backend != nullptr) {
         return {backend, reg.devices[cpu]};

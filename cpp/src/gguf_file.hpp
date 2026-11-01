@@ -31,8 +31,19 @@ public:
      */
     using UploadObserver = std::function<void(std::size_t inBytesDone, std::size_t inBytesTotal)>;
 
+    /**
+     * Opens the metadata and declares the tensors without allocating them:
+     * their shapes and types are known, their data is not until `upload`.
+     */
+    explicit GgufFile(const std::filesystem::path& inPath);
+
+    /** Opens the file and uploads it into `inBackend`. */
     GgufFile(const std::filesystem::path& inPath, ggml_backend_t inBackend, const UploadObserver& inObserver = {});
+
     ~GgufFile();
+
+    /** Allocates every tensor in `inBackend` and uploads its bytes. Call once. */
+    void upload(ggml_backend_t inBackend, const UploadObserver& inObserver = {});
 
     GgufFile(GgufFile&&) = delete;
     GgufFile& operator=(GgufFile&&) = delete;

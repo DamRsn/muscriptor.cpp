@@ -488,38 +488,16 @@ Model::~Model() = default;
 Model::Model(Model&&) noexcept = default;
 Model& Model::operator=(Model&&) noexcept = default;
 
-Model Model::load(const std::filesystem::path& inGgufPath, Options inOptions)
+/**
+ * Reads the checkpoint's metadata and declares the weights and KV cache,
+ * without allocating either: enough to build every graph and check it against
+ * a device before choosing one.
+ */
+static void openCheckpoint(Model::Impl& ioImpl, const std::filesystem::path& inGgufPath)
 {
-    Model model;
-    Impl& impl = *model.mImpl;
+    ioImpl.file = std::make_unique<GgufFile>(inGgufPath);
 
-    if (inOptions.n_threads <= 0) {
-        inOptions.n_threads = defaultThreadCount();
-    }
-
-    // The load-time callbacks are not kept: nothing may call them once `load`
-    // has returned.
-    impl.opts = inOptions;
-    impl.opts.should_cancel = {};
-    impl.opts.on_progress = {};
-
-    // Not interruptible: on a GPU this can include compiling shaders.
-    InitialisedBackend initialised = initBackend(inOptions.device);
-    impl.backend = initialised.backend;
-    impl.device = std::move(initialised.device);
-
-    throwIfCancelled(inOptions.should_cancel);
-
-    impl.file = std::make_unique<GgufFile>(
-        inGgufPath, impl.backend, [&inOptions](std::size_t inBytesDone, std::size_t inBytesTotal) {
-            throwIfCancelled(inOptions.should_cancel);
-
-            if (inOptions.on_progress) {
-                inOptions.on_progress(inBytesTotal > 0 ? static_cast<float>(inBytesDone) / inBytesTotal : 1.0f);
-            }
-        });
-
-    const GgufFile& f = *impl.file;
+    const GgufFile& f = *ioImpl.file;
 
     // Before anything else is read: every key below is part of the contract
     // this number names.
@@ -534,7 +512,7 @@ Model Model::load(const std::filesystem::path& inGgufPath, Options inOptions)
                                     CHECKPOINT_FORMAT_VERSION));
     }
 
-    Hparams& hp = impl.hp;
+    Hparams& hp = ioImpl.hp;
     hp.dim = f.i32(key("embedding_length"));
     hp.n_layer = f.i32(key("block_count"));
     hp.n_head = f.i32(key("attention.head_count"));
@@ -557,7 +535,7 @@ Model Model::load(const std::filesystem::path& inGgufPath, Options inOptions)
                         msl::format("inconsistent head geometry: {} heads x {} != {}", hp.n_head, hp.head_dim, hp.dim));
     }
 
-    Weights& w = impl.w;
+    Weights& w = ioImpl.w;
     w.token_embd = f.get("token_embd.weight");
     w.output = f.get("output.weight");
     w.output_norm_w = f.get("output_norm.weight");
@@ -589,28 +567,68 @@ Model Model::load(const std::filesystem::path& inGgufPath, Options inOptions)
         ggml_init_params params {};
         params.mem_size = ggml_tensor_overhead() * static_cast<std::size_t>(hp.n_layer) * 2 + 1024;
         params.no_alloc = true;
-        impl.kv_ctx = ggml_init(params);
-        impl.k_cache.resize(static_cast<std::size_t>(hp.n_layer));
-        impl.v_cache.resize(static_cast<std::size_t>(hp.n_layer));
+        ioImpl.kv_ctx = ggml_init(params);
+        ioImpl.k_cache.resize(static_cast<std::size_t>(hp.n_layer));
+        ioImpl.v_cache.resize(static_cast<std::size_t>(hp.n_layer));
 
         for (int il = 0; il < hp.n_layer; ++il) {
-            impl.k_cache[static_cast<std::size_t>(il)] = ggml_format_name(
-                ggml_new_tensor_2d(impl.kv_ctx, GGML_TYPE_F32, hp.dim, inOptions.n_ctx), "cache_k.%d", il);
-            impl.v_cache[static_cast<std::size_t>(il)] = ggml_format_name(
-                ggml_new_tensor_3d(impl.kv_ctx, GGML_TYPE_F32, inOptions.n_ctx, hp.head_dim, hp.n_head),
+            ioImpl.k_cache[static_cast<std::size_t>(il)] = ggml_format_name(
+                ggml_new_tensor_2d(ioImpl.kv_ctx, GGML_TYPE_F32, hp.dim, ioImpl.opts.n_ctx), "cache_k.%d", il);
+            ioImpl.v_cache[static_cast<std::size_t>(il)] = ggml_format_name(
+                ggml_new_tensor_3d(ioImpl.kv_ctx, GGML_TYPE_F32, ioImpl.opts.n_ctx, hp.head_dim, hp.n_head),
                 "cache_v.%d",
                 il);
         }
-
-        impl.kv_buf = ggml_backend_alloc_ctx_tensors(impl.kv_ctx, impl.backend);
-
-        if (impl.kv_buf == nullptr) {
-            throw Exception(Error::OutOfMemory, "failed to allocate the KV cache");
-        }
     }
 
-    impl.max_graph_nodes = graphNodeBound(hp.n_layer);
-    impl.graph_buffer.resize(graphBufferSize(impl.max_graph_nodes));
+    ioImpl.max_graph_nodes = graphNodeBound(hp.n_layer);
+    ioImpl.graph_buffer.resize(graphBufferSize(ioImpl.max_graph_nodes));
+}
+
+static std::vector<DeviceSupport> checkGraphs(Model::Impl& inImpl);
+
+Model Model::load(const std::filesystem::path& inGgufPath, Options inOptions)
+{
+    Model model;
+    Impl& impl = *model.mImpl;
+
+    if (inOptions.n_threads <= 0) {
+        inOptions.n_threads = defaultThreadCount();
+    }
+
+    // The load-time callbacks are not kept: nothing may call them once `load`
+    // has returned.
+    impl.opts = inOptions;
+    impl.opts.should_cancel = {};
+    impl.opts.on_progress = {};
+
+    requireCpuBackend();
+    openCheckpoint(impl, inGgufPath);
+    const std::vector<DeviceSupport> support = checkGraphs(impl);
+
+    // Not interruptible: on a GPU this can include compiling shaders.
+    InitialisedBackend initialised = initBackend(inOptions.device, support);
+    impl.backend = initialised.backend;
+    impl.device = std::move(initialised.device);
+
+    throwIfCancelled(inOptions.should_cancel);
+
+    impl.file->upload(impl.backend, [&inOptions](std::size_t inBytesDone, std::size_t inBytesTotal) {
+        throwIfCancelled(inOptions.should_cancel);
+
+        if (inOptions.on_progress) {
+            inOptions.on_progress(inBytesTotal > 0 ? static_cast<float>(inBytesDone) / inBytesTotal : 1.0f);
+        }
+    });
+
+    const Hparams& hp = impl.hp;
+    const Weights& w = impl.w;
+
+    impl.kv_buf = ggml_backend_alloc_ctx_tensors(impl.kv_ctx, impl.backend);
+
+    if (impl.kv_buf == nullptr) {
+        throw Exception(Error::OutOfMemory, "failed to allocate the KV cache");
+    }
 
     impl.alloc = ggml_gallocr_new(ggml_backend_get_default_buffer_type(impl.backend));
 
@@ -1061,6 +1079,66 @@ static EvalGraph
 
     ggml_build_forward_expand(ioScratch.gf, eg.logits);
     return eg;
+}
+
+namespace
+{
+
+    /** @return The op and its sources' types, e.g. `"MUL_MAT (f16, f32)"`. */
+    std::string describeOp(const ggml_tensor* inNode)
+    {
+        std::string types;
+
+        for (int i = 0; i < GGML_MAX_SRC && inNode->src[i] != nullptr; ++i) {
+            types += (i == 0 ? "" : ", ") + std::string(ggml_type_name(inNode->src[i]->type));
+        }
+
+        return types.empty() ? ggml_op_desc(inNode) : msl::format("{} ({})", ggml_op_desc(inNode), types);
+    }
+
+} // namespace
+
+/**
+ * Checks every node of a prefill and of a decode step against every device.
+ * Both, because shapes choose kernels: ggml-metal runs a matmul over more than
+ * 8 rows on matrix-matrix kernels, a shorter one on matrix-vector kernels.
+ *
+ * @param inImpl A model whose checkpoint is open, uploaded or not.
+ * @return One entry per device in `availableDevices()`.
+ */
+static std::vector<DeviceSupport> checkGraphs(Model::Impl& inImpl)
+{
+    // Half the context: a prefill that long fits any n_ctx with room for the
+    // class rows and the token.
+    const int prefill_frames = std::max(1, inImpl.opts.n_ctx / 2);
+
+    std::vector<std::uint8_t> decode_buffer(inImpl.graph_buffer.size());
+    GraphScratch prefill(inImpl.graph_buffer, inImpl.max_graph_nodes);
+    GraphScratch decode(decode_buffer, inImpl.max_graph_nodes);
+    buildEvalGraph(inImpl, prefill, prefill_frames, 1, nullptr);
+    buildEvalGraph(inImpl, decode, 0, 1, nullptr);
+
+    return checkDeviceSupport([&](ggml_backend_dev_t inDevice) {
+        for (ggml_cgraph* graph: {prefill.gf, decode.gf}) {
+            for (int i = 0; i < ggml_graph_n_nodes(graph); ++i) {
+                const ggml_tensor* node = ggml_graph_node(graph, i);
+
+                if (!ggml_backend_dev_supports_op(inDevice, node)) {
+                    return describeOp(node);
+                }
+            }
+        }
+
+        return std::string();
+    });
+}
+
+std::vector<DeviceSupport> Model::checkDevices(const std::filesystem::path& inGgufPath, const Options& inOptions)
+{
+    Model model;
+    model.mImpl->opts.n_ctx = inOptions.n_ctx;
+    openCheckpoint(*model.mImpl, inGgufPath);
+    return checkGraphs(*model.mImpl);
 }
 
 std::vector<float> Model::prefill(std::span<const float> inConditioning,

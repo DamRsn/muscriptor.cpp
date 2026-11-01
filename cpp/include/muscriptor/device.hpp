@@ -25,6 +25,17 @@ struct Device {
 };
 
 /**
+ * Whether a device can run a checkpoint's model, as its backend reports for
+ * each op of the model's graphs. See `Transcriber::checkDevices`.
+ */
+struct DeviceSupport {
+    /** The first op the device cannot run, e.g. `"MUL_MAT (f16, f32)"`; empty when it runs them all. */
+    std::string unsupported_op;
+
+    bool supported() const { return unsupported_op.empty(); }
+};
+
+/**
  * The devices this build can run on, GPUs first in the backend's own order,
  * the CPU always last, so the list is never empty.
  *
@@ -43,6 +54,16 @@ std::vector<Device> availableDevices();
  * @return An index into `inDevices`.
  */
 std::size_t autoDevice(std::span<const Device> inDevices);
+
+/**
+ * The device Auto resolves to for a checkpoint: as `autoDevice(inDevices)`,
+ * among the GPUs `inSupport` marks supported.
+ *
+ * @param inDevices A list from `availableDevices`.
+ * @param inSupport From `Transcriber::checkDevices`, one entry per device.
+ * @return An index into `inDevices`.
+ */
+std::size_t autoDevice(std::span<const Device> inDevices, std::span<const DeviceSupport> inSupport);
 
 /**
  * The instruction-set variant of the CPU backend this process runs. On an

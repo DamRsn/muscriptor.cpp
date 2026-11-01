@@ -147,7 +147,8 @@ these are skipped too:
 
 `muscriptor_bench` takes the same `--size`, `--device` and `--weight-dtype`
 options ([`PERFORMANCE.md`](PERFORMANCE.md)). Its `--device` also takes `auto`
-or an index from `--list-devices`.
+or an index from `--list-devices`, which checks each device against the
+selected weights and names the first op a device cannot run.
 
 On a build with CPU variants ([`BUILDING.md`](BUILDING.md#cpu-variants)), the
 CPU tests run on the variant the machine selects. To cover all three, run

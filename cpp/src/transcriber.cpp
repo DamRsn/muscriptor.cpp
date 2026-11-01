@@ -393,6 +393,21 @@ std::expected<Transcriber, Error> Transcriber::load(const std::filesystem::path&
     }
 }
 
+std::expected<std::vector<DeviceSupport>, Error> Transcriber::checkDevices(const std::filesystem::path& inGgufPath)
+{
+    try {
+        ModelOptions options;
+        options.n_ctx = requiredContext(melFramesPerChunk(SAMPLE_RATE / Vocabulary::FRAME_RATE));
+        return Model::checkDevices(inGgufPath, options);
+    } catch (const Exception& e) {
+        return std::unexpected(e.error());
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(Error::OutOfMemory);
+    } catch (const std::exception&) {
+        return std::unexpected(Error::Internal);
+    }
+}
+
 const Device& Transcriber::device() const
 {
     return mImpl->device();

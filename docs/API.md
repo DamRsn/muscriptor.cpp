@@ -41,11 +41,25 @@ called on the loading thread, cover it:
 `LoadOptions::device` picks where the model runs:
 
 - **Empty, the default: Auto.** The first discrete GPU, otherwise the first
-  integrated GPU, and the CPU when there is no GPU or it fails to initialise.
-  `autoDevice(devices)` says which one that is before loading.
+  integrated GPU, among those that can run the checkpoint, and the CPU when
+  there is none or it fails to initialise. `autoDevice(devices, support)` says
+  which one that is before loading.
 - **An index into `availableDevices()`.** A requirement, not a request: if
-  that device fails to initialise, or the index is out of range, `load`
-  returns `Error::DeviceUnavailable` rather than running somewhere else.
+  that device cannot run the checkpoint, fails to initialise, or the index is
+  out of range, `load` returns `Error::DeviceUnavailable` rather than running
+  somewhere else.
+
+Whether a device can run the checkpoint is decided before any weight is
+uploaded: `load` builds the model's graphs and asks the device's backend about
+every op in them. A GPU can lack an op the model needs (ggml-metal runs no
+matmul without SIMD-group reductions, which Intel GPUs on macOS 11 and 12 do
+not have), and running it anyway would abort the process.
+`Transcriber::checkDevices(path)` makes the same check without loading
+anything, returning a `DeviceSupport` per device whose `unsupported_op` names
+the first op it cannot run, e.g. `"MUL_MAT (f16, f32)"`, and is empty when it
+runs them all. A host can use it to mark devices unusable before the user picks
+one, and to tell when Auto passed over a GPU. A device that fails to be created
+is reported as supported: the check cannot say, and `load` fails it as above.
 
 `availableDevices()` lists the GPUs in the backend's own order, then the CPU,
 which is always last, so the list is never empty. Each `Device` has a `name`
@@ -236,7 +250,7 @@ starts from a clean state.
 | `UnsupportedArch` | Audio framing other than 16 kHz / 100 Hz / hop 160, or inconsistent attention geometry |
 | `UnsupportedCheckpointVersion` | A GGUF with a different `muscriptor.format_version`, or none, as in a GGUF of another model |
 | `OutOfMemory` | Allocation failed, or no backend could be initialised |
-| `DeviceUnavailable` | `LoadOptions::device` is out of range, or that device failed to initialise |
+| `DeviceUnavailable` | `LoadOptions::device` is out of range, or that device cannot run the checkpoint or failed to initialise |
 | `ContextOverflow` | A chunk's prefix plus its forced prompt does not fit in the KV cache |
 | `Cancelled` | A `should_cancel` predicate returned `true`, or the note callback returned `false` |
 | `InvalidArgument` | Unusable `TranscribeOptions`, e.g. an instrument outside the named groups |

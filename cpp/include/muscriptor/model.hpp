@@ -77,6 +77,16 @@ public:
 
     static Model load(const std::filesystem::path& inGgufPath, Options inOptions = {});
 
+    /**
+     * Checks the checkpoint's graphs against every device in
+     * `availableDevices()` without loading any weights. Only
+     * `inOptions.n_ctx` is read.
+     *
+     * @return One entry per device, in the same order.
+     */
+    static std::vector<DeviceSupport> checkDevices(const std::filesystem::path& inGgufPath,
+                                                   const Options& inOptions = {});
+
     ~Model();
     Model(Model&&) noexcept;
     Model& operator=(Model&&) noexcept;
