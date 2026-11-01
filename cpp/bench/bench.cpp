@@ -368,8 +368,10 @@ int main(int argc, char** argv)
                 const msl::Device& device = devices[i];
                 const std::optional<msl::DeviceSupport> checked =
                     support.has_value() ? (*support)[i] : std::optional<msl::DeviceSupport> {};
-                const std::string unsupported =
-                    checked.has_value() && !checked->supported() ? "  cannot run " + checked->unsupported_op : "";
+                const std::string unsupported = !checked.has_value() || checked->supported() ? ""
+                                                : !checked->created()
+                                                    ? "  could not be created: " + checked->creation_error
+                                                    : "  cannot run " + checked->unsupported_op;
                 std::printf("%2zu  %-6s  %-10s  %8.2f GB  %s%s%s\n",
                             i,
                             device.backend.c_str(),

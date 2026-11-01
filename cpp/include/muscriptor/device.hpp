@@ -33,7 +33,14 @@ struct DeviceSupport {
     /** The first op the device cannot run, e.g. `"MUL_MAT (f16, f32)"`; empty when it runs them all. */
     std::string unsupported_op;
 
-    bool supported() const { return unsupported_op.empty(); }
+    /**
+     * Why the device could not be created or initialised, then or earlier in
+     * the process; empty when it was. A device that failed is never retried.
+     */
+    std::string creation_error;
+
+    bool created() const { return creation_error.empty(); }
+    bool supported() const { return created() && unsupported_op.empty(); }
 };
 
 /**
@@ -58,8 +65,10 @@ std::vector<Device> availableDevices();
 std::size_t autoDevice(std::span<const Device> inDevices);
 
 /**
- * The device `LoadOptions::device` left empty tries for a checkpoint: as
- * `autoDevice(inDevices)`, passing over the GPUs `inSupport` marks unsupported.
+ * The device `LoadOptions::device` left empty runs on, as far as `inSupport`
+ * knows: as `autoDevice(inDevices)`, passing over the GPUs that cannot run an
+ * op, and the CPU when the GPU it would try could not be created. A GPU not
+ * checked counts as able to run the model.
  *
  * @param inDevices A list from `availableDevices`.
  * @param inSupport From `Transcriber::checkDevices`, one entry per device.

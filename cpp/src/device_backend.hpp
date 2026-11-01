@@ -36,7 +36,7 @@ using SupportCheck = std::function<std::string(ggml_backend_dev_t inDevice)>;
  * at `Transcriber::checkDevices`.
  *
  * @return One entry per device of `availableDevices()`, empty for a device
- *         not checked or that could not be created.
+ *         not checked.
  */
 std::vector<std::optional<DeviceSupport>> checkDeviceSupport(std::optional<std::size_t> inDevice,
                                                              const SupportCheck& inCheck);

@@ -166,13 +166,14 @@ public:
     /**
      * Which devices can run a checkpoint, from its metadata alone: no weight is
      * read. Checks the devices `load` with this `inDevice` would check: that
-     * device, or for Auto the GPUs in Auto order up to the first one not
-     * unsupported, and the CPU when every GPU is. On Vulkan, checking a GPU
+     * device, or for Auto the GPUs in Auto order up to the first one that is
+     * supported or could not be created, and the CPU when every GPU is
+     * unsupported. On Vulkan, checking a GPU
      * sets up ggml's device for it, as a load would. Thread-safe.
      *
      * @param inDevice As `LoadOptions::device`.
      * @return One entry per device of `availableDevices()`, in the same order,
-     *         empty for a device not checked or that could not be created. Fails
+     *         empty for a device not checked. Fails
      *         on a missing or unreadable checkpoint, an unsupported CPU and an
      *         index out of range, with the errors `load` returns; the other
      *         reasons `load` can reject a checkpoint are not checked.

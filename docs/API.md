@@ -58,14 +58,16 @@ process. Auto passes over such a GPU, and makes one GPU attempt.
 
 `Transcriber::checkDevices(path, device)` makes the check `load` with the same
 `device` would make, without loading anything: the named device, or for Auto
-the GPUs in Auto order up to the first one not unsupported, then the CPU if
-every GPU is. On Vulkan, checking a GPU creates ggml's device for it, so a
-host that checks only the devices it will use touches no other GPU. Each
-checked device gets a `DeviceSupport` whose `unsupported_op` names the first op
-it cannot run, e.g. `"MUL_MAT (f16, f32)"`, and is empty when it runs them all.
-A device not checked, or that fails to be created, gets an empty entry; `load`
-fails the latter as above. `autoDevice(devices, support)` passes over only the
-GPUs marked unsupported.
+the GPUs in Auto order up to the first one that is supported or could not be
+created, then the CPU if every GPU lacks an op. On Vulkan, checking a GPU
+creates ggml's device for it, so a host that checks only the devices it will
+use touches no other GPU. Each checked device gets a `DeviceSupport`:
+`unsupported_op` names the first op it cannot run, e.g. `"MUL_MAT (f16, f32)"`,
+and `creation_error` says why it could not be created or initialised. A device
+that failed once is never retried in the process, so a check after a failed
+load reports it too. A device not checked gets an empty entry.
+`autoDevice(devices, support)` names the device Auto runs on as far as the
+check knows: the CPU when the GPU it would try could not be created.
 
 `availableDevices()` lists the GPUs in the backend's own order, then the CPU,
 which is always last, so the list is never empty. Each `Device` has a `name`
@@ -277,7 +279,7 @@ directory named after it (`v1/`).
 
 The library prints nothing. ggml's log output, and the library's own messages
 (why a device was passed over, and the reason behind every error a call
-returns, prefixed `muscriptor: `), go through a sink that is silent by default:
+returns except `Cancelled`, prefixed `muscriptor: `), go through a sink that is silent by default:
 
 ```c++
 msl::setLogCallback([](msl::LogLevel level, std::string_view text) { myLog(level, text); },
