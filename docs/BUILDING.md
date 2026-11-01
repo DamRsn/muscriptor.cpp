@@ -263,6 +263,12 @@ compile flags; ggml would otherwise enable all six when native tuning is off.
     Vulkan devices if it cannot.
   - MinGW links the loader directly, so a MinGW binary does not load at all
     without `vulkan-1.dll`.
+- **Implicit layers.** On Windows, ggml's Vulkan instance is created with
+  `VK_LOADER_LAYERS_DISABLE=~implicit~`, so system-wide layers installed by
+  screen recorders and overlays are not loaded into it. Some of them crash the
+  driver when ggml creates its device. The variable is set only around instance
+  creation and only when the environment does not already set it, so a host
+  can choose its own filter by setting it before the first device enumeration.
 - **The ggml registry.** ggml's global backend registry initialises Vulkan the
   first time it is used. On Windows, without `vulkan-1.dll`, that raises a
   delay-load exception that its C++ `catch` does not handle. The library never

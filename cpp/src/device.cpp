@@ -53,6 +53,39 @@ namespace
     }
 #endif
 
+#if defined(MUSCRIPTOR_HAS_VULKAN) && defined(_WIN32)
+    /**
+     * Keeps implicit Vulkan layers, which screen recorders and overlays
+     * install system-wide, out of an instance created while this is alive.
+     * Some crash the driver when ggml creates its device. The loader reads the
+     * variable only in `vkCreateInstance`. A value already set is left alone.
+     */
+    class ImplicitVulkanLayersDisabled
+    {
+    public:
+        ImplicitVulkanLayersDisabled()
+            : mWasSet(GetEnvironmentVariableW(VARIABLE, nullptr, 0) == 0
+                      && SetEnvironmentVariableW(VARIABLE, L"~implicit~") != 0)
+        {
+        }
+
+        ~ImplicitVulkanLayersDisabled()
+        {
+            if (mWasSet) {
+                SetEnvironmentVariableW(VARIABLE, nullptr);
+            }
+        }
+
+        ImplicitVulkanLayersDisabled(const ImplicitVulkanLayersDisabled&) = delete;
+        ImplicitVulkanLayersDisabled& operator=(const ImplicitVulkanLayersDisabled&) = delete;
+
+    private:
+        static constexpr const wchar_t* VARIABLE = L"VK_LOADER_LAYERS_DISABLE";
+
+        bool mWasSet;
+    };
+#endif
+
     /** `devices[i]` runs on `handles[i]`; the CPU's handle is null. */
     struct Registry {
         std::vector<Device> devices;
@@ -102,7 +135,17 @@ namespace
             // ggml_backend_vk_reg catches instance-creation failures; the device
             // queries after it are not guarded.
             try {
-                if (ggml_backend_reg_t reg = ggml_backend_vk_reg(); reg != nullptr) {
+                // ggml creates its one Vulkan instance in here.
+                ggml_backend_reg_t reg = nullptr;
+
+                {
+#if defined(_WIN32)
+                    const ImplicitVulkanLayersDisabled layers_disabled;
+#endif
+                    reg = ggml_backend_vk_reg();
+                }
+
+                if (reg != nullptr) {
                     const std::size_t count = ggml_backend_reg_dev_count(reg);
 
                     for (std::size_t i = 0; i < count; ++i) {
