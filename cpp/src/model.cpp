@@ -1123,7 +1123,8 @@ static std::string firstUnsupportedOp(Model::Impl& ioImpl, ggml_backend_dev_t in
     return {};
 }
 
-std::vector<DeviceSupport> Model::checkDevices(const std::filesystem::path& inGgufPath, const Options& inOptions)
+std::vector<std::optional<DeviceSupport>> Model::checkDevices(const std::filesystem::path& inGgufPath,
+                                                              const Options& inOptions)
 {
     requireCpuBackend();
 
@@ -1132,7 +1133,8 @@ std::vector<DeviceSupport> Model::checkDevices(const std::filesystem::path& inGg
     impl.opts.n_ctx = inOptions.n_ctx;
     openCheckpoint(impl, inGgufPath);
 
-    return checkDeviceSupport([&impl](ggml_backend_dev_t inDevice) { return firstUnsupportedOp(impl, inDevice); });
+    return checkDeviceSupport(inOptions.device,
+                              [&impl](ggml_backend_dev_t inDevice) { return firstUnsupportedOp(impl, inDevice); });
 }
 
 std::vector<float> Model::prefill(std::span<const float> inConditioning,

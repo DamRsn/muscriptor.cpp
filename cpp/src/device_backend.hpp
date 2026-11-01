@@ -32,12 +32,14 @@ ggml_tensor* firstUnsupportedNode(ggml_backend_dev_t inDevice, ggml_cgraph* inGr
 using SupportCheck = std::function<std::string(ggml_backend_dev_t inDevice)>;
 
 /**
- * Checks every one of `availableDevices()`.
+ * Checks the devices `initBackend(inDevice, ...)` would check, as described
+ * at `Transcriber::checkDevices`.
  *
- * @return One entry per device. A device that cannot even be created is
- *         reported as supported: `initBackend` is what fails it.
+ * @return One entry per device of `availableDevices()`, empty for a device
+ *         not checked or that could not be created.
  */
-std::vector<DeviceSupport> checkDeviceSupport(const SupportCheck& inCheck);
+std::vector<std::optional<DeviceSupport>> checkDeviceSupport(std::optional<std::size_t> inDevice,
+                                                             const SupportCheck& inCheck);
 
 /**
  * Initialises the backend for one of `availableDevices()`, as described at

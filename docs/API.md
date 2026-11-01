@@ -54,12 +54,18 @@ uploaded: `load` builds the model's graphs and asks the backend of each device
 it tries about every op in them. A GPU can lack an op the model needs
 (ggml-metal runs no matmul without SIMD-group reductions, which it finds only
 on Apple7-family and Metal 3 GPUs), and running it anyway would abort the
-process. `Transcriber::checkDevices(path)` makes the same check on every
-device without loading anything, returning a `DeviceSupport` per device whose
-`unsupported_op` names the first op it cannot run, e.g. `"MUL_MAT (f16, f32)"`,
-and is empty when it runs them all. A host can use it to mark devices unusable before the user picks
-one, and to tell when Auto passed over a GPU. A device that fails to be created
-is reported as supported: the check cannot say, and `load` fails it as above.
+process. Auto passes over such a GPU, and makes one GPU attempt.
+
+`Transcriber::checkDevices(path, device)` makes the check `load` with the same
+`device` would make, without loading anything: the named device, or for Auto
+the GPUs in Auto order up to the first one not unsupported, then the CPU if
+every GPU is. On Vulkan, checking a GPU creates ggml's device for it, so a
+host that checks only the devices it will use touches no other GPU. Each
+checked device gets a `DeviceSupport` whose `unsupported_op` names the first op
+it cannot run, e.g. `"MUL_MAT (f16, f32)"`, and is empty when it runs them all.
+A device not checked, or that fails to be created, gets an empty entry; `load`
+fails the latter as above. `autoDevice(devices, support)` passes over only the
+GPUs marked unsupported.
 
 `availableDevices()` lists the GPUs in the backend's own order, then the CPU,
 which is always last, so the list is never empty. Each `Device` has a `name`
@@ -250,7 +256,7 @@ starts from a clean state.
 | `UnsupportedArch` | Audio framing other than 16 kHz / 100 Hz / hop 160, or inconsistent attention geometry |
 | `UnsupportedCheckpointVersion` | A GGUF with a different `muscriptor.format_version`, or none, as in a GGUF of another model |
 | `OutOfMemory` | Allocation failed, or no backend could be initialised |
-| `DeviceUnavailable` | `LoadOptions::device` is out of range, or that device cannot run the checkpoint or failed to initialise |
+| `DeviceUnavailable` | `LoadOptions::device` is out of range, or that device cannot run the checkpoint or failed to initialise; or, under Auto, not even the CPU can run it |
 | `ContextOverflow` | A chunk's prefix plus its forced prompt does not fit in the KV cache |
 | `Cancelled` | A `should_cancel` predicate returned `true`, or the note callback returned `false` |
 | `InvalidArgument` | Unusable `TranscribeOptions`, e.g. an instrument outside the named groups |
@@ -269,8 +275,9 @@ directory named after it (`v1/`).
 
 ## Logging
 
-The library prints nothing. ggml's log output is routed through a sink that is
-silent by default:
+The library prints nothing. ggml's log output, and the library's own messages
+(why a device was passed over, and the reason behind every error a call
+returns, prefixed `muscriptor: `), go through a sink that is silent by default:
 
 ```c++
 msl::setLogCallback([](msl::LogLevel level, std::string_view text) { myLog(level, text); },

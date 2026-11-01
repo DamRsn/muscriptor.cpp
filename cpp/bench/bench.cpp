@@ -345,9 +345,20 @@ int main(int argc, char** argv)
         const double enumeration_ms = millisSince(enumeration_began);
 
         if (args.list_devices) {
-            // Against the weights when they are there; the listing needs none.
+            // Every device, each checked on its own, against the weights when
+            // they are there; the listing needs none.
             const Clock::time_point check_began = Clock::now();
-            const auto support = msl::Transcriber::checkDevices(args.weights);
+            std::expected<std::vector<std::optional<msl::DeviceSupport>>, msl::Error> support =
+                std::vector<std::optional<msl::DeviceSupport>>(devices.size());
+
+            for (std::size_t i = 0; i < devices.size() && support.has_value(); ++i) {
+                if (auto checked = msl::Transcriber::checkDevices(args.weights, i); checked.has_value()) {
+                    (*support)[i] = (*checked)[i];
+                } else {
+                    support = std::unexpected(checked.error());
+                }
+            }
+
             const double check_ms = millisSince(check_began);
 
             const std::size_t auto_device =
@@ -355,9 +366,10 @@ int main(int argc, char** argv)
 
             for (std::size_t i = 0; i < devices.size(); ++i) {
                 const msl::Device& device = devices[i];
-                const std::string unsupported = support.has_value() && !(*support)[i].supported()
-                                                    ? "  cannot run " + (*support)[i].unsupported_op
-                                                    : "";
+                const std::optional<msl::DeviceSupport> checked =
+                    support.has_value() ? (*support)[i] : std::optional<msl::DeviceSupport> {};
+                const std::string unsupported =
+                    checked.has_value() && !checked->supported() ? "  cannot run " + checked->unsupported_op : "";
                 std::printf("%2zu  %-6s  %-10s  %8.2f GB  %s%s%s\n",
                             i,
                             device.backend.c_str(),

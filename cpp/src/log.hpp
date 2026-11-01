@@ -15,4 +15,7 @@ namespace msl
  */
 void installLogHook();
 
+/** Sends one of the library's own messages to the sink, filtered as ggml's are. */
+void logMessage(LogLevel inLevel, std::string_view inText);
+
 } // namespace msl

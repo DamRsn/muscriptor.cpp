@@ -164,16 +164,21 @@ public:
     static std::expected<Transcriber, Error> load(const std::filesystem::path& inGgufPath, LoadOptions inOptions = {});
 
     /**
-     * Which of `availableDevices()` can run a checkpoint, from its metadata
-     * alone: no weight is read. `load` makes the same check, on the devices it
-     * tries only. On Vulkan, the query also sets up ggml's device for each GPU,
-     * as a first load would.
-     * Thread-safe.
+     * Which devices can run a checkpoint, from its metadata alone: no weight is
+     * read. Checks the devices `load` with this `inDevice` would check: that
+     * device, or for Auto the GPUs in Auto order up to the first one not
+     * unsupported, and the CPU when every GPU is. On Vulkan, checking a GPU
+     * sets up ggml's device for it, as a load would. Thread-safe.
      *
-     * @return One entry per device, in the same order. Fails as `load` does on
-     *         a missing or unreadable checkpoint and on an unsupported CPU.
+     * @param inDevice As `LoadOptions::device`.
+     * @return One entry per device of `availableDevices()`, in the same order,
+     *         empty for a device not checked or that could not be created. Fails
+     *         on a missing or unreadable checkpoint, an unsupported CPU and an
+     *         index out of range, with the errors `load` returns; the other
+     *         reasons `load` can reject a checkpoint are not checked.
      */
-    static std::expected<std::vector<DeviceSupport>, Error> checkDevices(const std::filesystem::path& inGgufPath);
+    static std::expected<std::vector<std::optional<DeviceSupport>>, Error>
+        checkDevices(const std::filesystem::path& inGgufPath, std::optional<std::size_t> inDevice = std::nullopt);
 
     /** @return The device the model runs on, as listed by `availableDevices()`. */
     const Device& device() const;

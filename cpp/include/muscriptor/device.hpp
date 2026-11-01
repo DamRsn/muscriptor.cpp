@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -58,13 +59,13 @@ std::size_t autoDevice(std::span<const Device> inDevices);
 
 /**
  * The device `LoadOptions::device` left empty tries for a checkpoint: as
- * `autoDevice(inDevices)`, among the GPUs `inSupport` marks supported.
+ * `autoDevice(inDevices)`, passing over the GPUs `inSupport` marks unsupported.
  *
  * @param inDevices A list from `availableDevices`.
  * @param inSupport From `Transcriber::checkDevices`, one entry per device.
  * @return An index into `inDevices`.
  */
-std::size_t autoDevice(std::span<const Device> inDevices, std::span<const DeviceSupport> inSupport);
+std::size_t autoDevice(std::span<const Device> inDevices, std::span<const std::optional<DeviceSupport>> inSupport);
 
 /**
  * The instruction-set variant of the CPU backend this process runs. On an
