@@ -13,7 +13,9 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
+#include <vector>
 
 #if defined(MUSCRIPTOR_HAS_METAL)
 #include <ggml-metal.h>
@@ -149,6 +151,50 @@ namespace
         return failed;
     }
 
+    /** Thrown by firstUnsupportedNode when the query fails to create the device. */
+    struct DeviceCreationFailed {
+    };
+
+    /** The GPUs in the order Auto tries them: discrete ones, then integrated ones, each in list order. */
+    std::vector<std::size_t> autoOrder(std::span<const Device> inDevices)
+    {
+        std::vector<std::size_t> order;
+
+        for (const bool integrated: {false, true}) {
+            for (std::size_t i = 0; i < inDevices.size(); ++i) {
+                if (inDevices[i].backend != "CPU" && inDevices[i].integrated == integrated) {
+                    order.push_back(i);
+                }
+            }
+        }
+
+        return order;
+    }
+
+    /**
+     * @return Whether device `inIndex` can run the model, or nullopt when it
+     *         could not be created. Call with deviceMutex held.
+     */
+    std::optional<DeviceSupport> checkDevice(std::size_t inIndex, const SupportCheck& inCheck)
+    {
+        const Registry& reg = registry();
+        ggml_backend_dev_t handle = reg.handles[inIndex] != nullptr
+                                        ? reg.handles[inIndex]
+                                        : ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0);
+        std::set<ggml_backend_dev_t>& failed = failedHandles();
+
+        if (failed.contains(handle)) {
+            return std::nullopt;
+        }
+
+        try {
+            return DeviceSupport {.unsupported_op = inCheck(handle)};
+        } catch (const DeviceCreationFailed&) {
+            failed.insert(handle);
+            return std::nullopt;
+        }
+    }
+
     /**
      * @return The backend for `inHandle`, or null if it cannot be initialised.
      *         Call with deviceMutex held.
@@ -187,33 +233,21 @@ std::vector<Device> availableDevices()
 
 std::size_t autoDevice(std::span<const Device> inDevices)
 {
-    const auto discrete = std::ranges::find_if(
-        inDevices, [](const Device& inDevice) { return inDevice.backend != "CPU" && !inDevice.integrated; });
+    const std::vector<std::size_t> order = autoOrder(inDevices);
 
-    // GPUs come first, so index 0 is the first GPU, or the CPU when there is none.
-    return discrete != inDevices.end() ? static_cast<std::size_t>(discrete - inDevices.begin()) : 0;
+    // The CPU is always last.
+    return order.empty() ? inDevices.size() - 1 : order.front();
 }
 
 std::size_t autoDevice(std::span<const Device> inDevices, std::span<const DeviceSupport> inSupport)
 {
-    std::optional<std::size_t> first_gpu;
-
-    for (std::size_t i = 0; i < inDevices.size(); ++i) {
-        if (inDevices[i].backend == "CPU" || i >= inSupport.size() || !inSupport[i].supported()) {
-            continue;
-        }
-
-        if (!inDevices[i].integrated) {
+    for (const std::size_t i: autoOrder(inDevices)) {
+        if (i < inSupport.size() && inSupport[i].supported()) {
             return i;
-        }
-
-        if (!first_gpu.has_value()) {
-            first_gpu = i;
         }
     }
 
-    // The CPU is always last.
-    return first_gpu.value_or(inDevices.size() - 1);
+    return inDevices.size() - 1;
 }
 
 std::string_view cpuVariant()
@@ -234,54 +268,41 @@ void requireCpuBackend()
 #endif
 }
 
-std::vector<DeviceSupport>
-    checkDeviceSupport(const std::function<std::string(ggml_backend_dev_t inDevice)>& inFirstUnsupportedOp)
+ggml_tensor* firstUnsupportedNode(ggml_backend_dev_t inDevice, ggml_cgraph* inGraph)
 {
-    requireCpuBackend();
+    // A Vulkan query creates the device, which throws if the device refuses.
+    try {
+        for (int i = 0; i < ggml_graph_n_nodes(inGraph); ++i) {
+            if (ggml_tensor* node = ggml_graph_node(inGraph, i); !ggml_backend_dev_supports_op(inDevice, node)) {
+                return node;
+            }
+        }
+    } catch (...) {
+        throw DeviceCreationFailed {};
+    }
 
-    const Registry& reg = registry();
-    std::vector<DeviceSupport> support(reg.devices.size());
+    return nullptr;
+}
 
+std::vector<DeviceSupport> checkDeviceSupport(const SupportCheck& inCheck)
+{
+    std::vector<DeviceSupport> support(registry().devices.size());
     const std::lock_guard<std::mutex> lock(deviceMutex());
-    std::set<ggml_backend_dev_t>& failed = failedHandles();
 
-    for (std::size_t i = 0; i < reg.devices.size(); ++i) {
-        ggml_backend_dev_t handle =
-            reg.handles[i] != nullptr ? reg.handles[i] : ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0);
-
-        if (failed.contains(handle)) {
-            continue;
-        }
-
-        // A Vulkan query creates the device, which throws if the device
-        // refuses.
-        try {
-            support[i].unsupported_op = inFirstUnsupportedOp(handle);
-        } catch (...) {
-            failed.insert(handle);
-        }
+    for (std::size_t i = 0; i < support.size(); ++i) {
+        support[i] = checkDevice(i, inCheck).value_or(DeviceSupport {});
     }
 
     return support;
 }
 
-InitialisedBackend initBackend(std::optional<std::size_t> inDevice, std::span<const DeviceSupport> inSupport)
+InitialisedBackend initBackend(std::optional<std::size_t> inDevice, const SupportCheck& inCheck)
 {
-    // Every model needs a CPU backend, for the conditioning front-end at least.
-    requireCpuBackend();
-
     const Registry& reg = registry();
     const std::size_t cpu = reg.devices.size() - 1;
 
-    if (inSupport.size() != reg.devices.size()) {
-        throw Exception(Error::Internal, "device support does not match the device list");
-    }
-
-    const auto require_support = [&](std::size_t inIndex) {
-        if (!inSupport[inIndex].supported()) {
-            throw Exception(Error::DeviceUnavailable,
-                            reg.devices[inIndex].name + " cannot run " + inSupport[inIndex].unsupported_op);
-        }
+    const auto cannot_run = [&](std::size_t inIndex, const std::string& inOp) {
+        return Exception(Error::DeviceUnavailable, reg.devices[inIndex].name + " cannot run " + inOp);
     };
 
     const std::lock_guard<std::mutex> lock(deviceMutex());
@@ -293,7 +314,9 @@ InitialisedBackend initBackend(std::optional<std::size_t> inDevice, std::span<co
             throw Exception(Error::DeviceUnavailable, "no device at index " + std::to_string(index));
         }
 
-        require_support(index);
+        if (const auto support = checkDevice(index, inCheck); support.has_value() && !support->supported()) {
+            throw cannot_run(index, support->unsupported_op);
+        }
 
         if (ggml_backend_t backend = initHandle(reg.handles[index]); backend != nullptr) {
             return {backend, reg.devices[index]};
@@ -302,13 +325,23 @@ InitialisedBackend initBackend(std::optional<std::size_t> inDevice, std::span<co
         throw Exception(Error::DeviceUnavailable, "failed to initialise " + reg.devices[index].name);
     }
 
-    if (const std::size_t pick = autoDevice(reg.devices, inSupport); pick != cpu) {
-        if (ggml_backend_t backend = initHandle(reg.handles[pick]); backend != nullptr) {
-            return {backend, reg.devices[pick]};
+    // The first GPU that is not known to be unsupported is Auto's only GPU
+    // attempt, as autoDevice(devices, support) names it.
+    for (const std::size_t i: autoOrder(reg.devices)) {
+        if (const auto support = checkDevice(i, inCheck); support.has_value() && !support->supported()) {
+            continue;
         }
+
+        if (ggml_backend_t backend = initHandle(reg.handles[i]); backend != nullptr) {
+            return {backend, reg.devices[i]};
+        }
+
+        break;
     }
 
-    require_support(cpu);
+    if (const auto support = checkDevice(cpu, inCheck); support.has_value() && !support->supported()) {
+        throw cannot_run(cpu, support->unsupported_op);
+    }
 
     if (ggml_backend_t backend = initHandle(nullptr); backend != nullptr) {
         return {backend, reg.devices[cpu]};

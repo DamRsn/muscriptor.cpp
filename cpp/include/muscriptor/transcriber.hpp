@@ -65,10 +65,11 @@ struct TranscribeOptions {
 /** Options fixed at load: they decide where the weights and KV cache live. */
 struct LoadOptions {
     /**
-     * Index into `availableDevices()`, or empty for Auto: `autoDevice`'s pick,
-     * falling back to the CPU. An explicit device that fails makes `load`
-     * return `Error::DeviceUnavailable`. `Transcriber::device` reports where
-     * the model runs. CPU and GPU results are not bit-identical.
+     * Index into `availableDevices()`, or empty for Auto: the GPU
+     * `autoDevice(devices, support)` names, falling back to the CPU. An
+     * explicit device that cannot run the checkpoint or fails to initialise
+     * makes `load` return `Error::DeviceUnavailable`. `Transcriber::device`
+     * reports where the model runs. CPU and GPU results are not bit-identical.
      */
     std::optional<std::size_t> device;
 
@@ -164,8 +165,9 @@ public:
 
     /**
      * Which of `availableDevices()` can run a checkpoint, from its metadata
-     * alone: no weight is read. `load` makes the same check. On Vulkan, the
-     * query also sets up ggml's device for each GPU, as a first load would.
+     * alone: no weight is read. `load` makes the same check, on the devices it
+     * tries only. On Vulkan, the query also sets up ggml's device for each GPU,
+     * as a first load would.
      * Thread-safe.
      *
      * @return One entry per device, in the same order. Fails as `load` does on

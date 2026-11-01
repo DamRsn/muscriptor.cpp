@@ -47,8 +47,9 @@ struct DeviceSupport {
 std::vector<Device> availableDevices();
 
 /**
- * The device `LoadOptions::device` left empty resolves to: the first discrete
- * GPU, otherwise the first integrated GPU, otherwise the CPU.
+ * The device Auto tries when every GPU can run the checkpoint: the first
+ * discrete GPU, otherwise the first integrated GPU, otherwise the CPU. Once
+ * the checkpoint is known, prefer the overload that takes its support.
  *
  * @param inDevices A list from `availableDevices`.
  * @return An index into `inDevices`.
@@ -56,8 +57,8 @@ std::vector<Device> availableDevices();
 std::size_t autoDevice(std::span<const Device> inDevices);
 
 /**
- * The device Auto resolves to for a checkpoint: as `autoDevice(inDevices)`,
- * among the GPUs `inSupport` marks supported.
+ * The device `LoadOptions::device` left empty tries for a checkpoint: as
+ * `autoDevice(inDevices)`, among the GPUs `inSupport` marks supported.
  *
  * @param inDevices A list from `availableDevices`.
  * @param inSupport From `Transcriber::checkDevices`, one entry per device.

@@ -585,7 +585,7 @@ static void openCheckpoint(Model::Impl& ioImpl, const std::filesystem::path& inG
     ioImpl.graph_buffer.resize(graphBufferSize(ioImpl.max_graph_nodes));
 }
 
-static std::vector<DeviceSupport> checkGraphs(Model::Impl& inImpl);
+static std::string firstUnsupportedOp(Model::Impl& ioImpl, ggml_backend_dev_t inDevice);
 
 Model Model::load(const std::filesystem::path& inGgufPath, Options inOptions)
 {
@@ -602,12 +602,13 @@ Model Model::load(const std::filesystem::path& inGgufPath, Options inOptions)
     impl.opts.should_cancel = {};
     impl.opts.on_progress = {};
 
+    // Every model needs a CPU backend, for the conditioning front-end at least.
     requireCpuBackend();
     openCheckpoint(impl, inGgufPath);
-    const std::vector<DeviceSupport> support = checkGraphs(impl);
 
     // Not interruptible: on a GPU this can include compiling shaders.
-    InitialisedBackend initialised = initBackend(inOptions.device, support);
+    InitialisedBackend initialised = initBackend(
+        inOptions.device, [&impl](ggml_backend_dev_t inDevice) { return firstUnsupportedOp(impl, inDevice); });
     impl.backend = initialised.backend;
     impl.device = std::move(initialised.device);
 
@@ -1099,46 +1100,39 @@ namespace
 } // namespace
 
 /**
- * Checks every node of a prefill and of a decode step against every device.
- * Both, because shapes choose kernels: ggml-metal runs a matmul over more than
- * 8 rows on matrix-matrix kernels, a shorter one on matrix-vector kernels.
- *
- * @param inImpl A model whose checkpoint is open, uploaded or not.
- * @return One entry per device in `availableDevices()`.
+ * @return The first op of a prefill or of a decode step that `inDevice`
+ *         cannot run, or an empty string. Both, because shapes choose kernels:
+ *         ggml-metal runs a matmul over more than 8 rows on matrix-matrix
+ *         kernels, a shorter one on matrix-vector kernels.
  */
-static std::vector<DeviceSupport> checkGraphs(Model::Impl& inImpl)
+static std::string firstUnsupportedOp(Model::Impl& ioImpl, ggml_backend_dev_t inDevice)
 {
     // Half the context: a prefill that long fits any n_ctx with room for the
     // class rows and the token.
-    const int prefill_frames = std::max(1, inImpl.opts.n_ctx / 2);
+    const int prefill_frames = std::max(1, ioImpl.opts.n_ctx / 2);
 
-    std::vector<std::uint8_t> decode_buffer(inImpl.graph_buffer.size());
-    GraphScratch prefill(inImpl.graph_buffer, inImpl.max_graph_nodes);
-    GraphScratch decode(decode_buffer, inImpl.max_graph_nodes);
-    buildEvalGraph(inImpl, prefill, prefill_frames, 1, nullptr);
-    buildEvalGraph(inImpl, decode, 0, 1, nullptr);
+    for (const int n_cond_frames: {prefill_frames, 0}) {
+        GraphScratch scratch(ioImpl.graph_buffer, ioImpl.max_graph_nodes);
+        buildEvalGraph(ioImpl, scratch, n_cond_frames, 1, nullptr);
 
-    return checkDeviceSupport([&](ggml_backend_dev_t inDevice) {
-        for (ggml_cgraph* graph: {prefill.gf, decode.gf}) {
-            for (int i = 0; i < ggml_graph_n_nodes(graph); ++i) {
-                const ggml_tensor* node = ggml_graph_node(graph, i);
-
-                if (!ggml_backend_dev_supports_op(inDevice, node)) {
-                    return describeOp(node);
-                }
-            }
+        if (const ggml_tensor* node = firstUnsupportedNode(inDevice, scratch.gf); node != nullptr) {
+            return describeOp(node);
         }
+    }
 
-        return std::string();
-    });
+    return {};
 }
 
 std::vector<DeviceSupport> Model::checkDevices(const std::filesystem::path& inGgufPath, const Options& inOptions)
 {
+    requireCpuBackend();
+
     Model model;
-    model.mImpl->opts.n_ctx = inOptions.n_ctx;
-    openCheckpoint(*model.mImpl, inGgufPath);
-    return checkGraphs(*model.mImpl);
+    Impl& impl = *model.mImpl;
+    impl.opts.n_ctx = inOptions.n_ctx;
+    openCheckpoint(impl, inGgufPath);
+
+    return checkDeviceSupport([&impl](ggml_backend_dev_t inDevice) { return firstUnsupportedOp(impl, inDevice); });
 }
 
 std::vector<float> Model::prefill(std::span<const float> inConditioning,

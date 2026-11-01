@@ -50,14 +50,14 @@ called on the loading thread, cover it:
   somewhere else.
 
 Whether a device can run the checkpoint is decided before any weight is
-uploaded: `load` builds the model's graphs and asks the device's backend about
-every op in them. A GPU can lack an op the model needs (ggml-metal runs no
-matmul without SIMD-group reductions, which Intel GPUs on macOS 11 and 12 do
-not have), and running it anyway would abort the process.
-`Transcriber::checkDevices(path)` makes the same check without loading
-anything, returning a `DeviceSupport` per device whose `unsupported_op` names
-the first op it cannot run, e.g. `"MUL_MAT (f16, f32)"`, and is empty when it
-runs them all. A host can use it to mark devices unusable before the user picks
+uploaded: `load` builds the model's graphs and asks the backend of each device
+it tries about every op in them. A GPU can lack an op the model needs
+(ggml-metal runs no matmul without SIMD-group reductions, which it finds only
+on Apple7-family and Metal 3 GPUs), and running it anyway would abort the
+process. `Transcriber::checkDevices(path)` makes the same check on every
+device without loading anything, returning a `DeviceSupport` per device whose
+`unsupported_op` names the first op it cannot run, e.g. `"MUL_MAT (f16, f32)"`,
+and is empty when it runs them all. A host can use it to mark devices unusable before the user picks
 one, and to tell when Auto passed over a GPU. A device that fails to be created
 is reported as supported: the check cannot say, and `load` fails it as above.
 

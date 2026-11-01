@@ -39,6 +39,9 @@ namespace
         return 1 + Transcriber::SEGMENT_SAMPLES / inHopLength;
     }
 
+    /** The KV positions `load` allocates. The hparams are checked against these constants after loading. */
+    constexpr int CHUNK_CONTEXT = requiredContext(melFramesPerChunk(Transcriber::SAMPLE_RATE / Vocabulary::FRAME_RATE));
+
     /** The selection, with duplicates removed but the caller's order kept. */
     std::vector<InstrumentGroup> uniqueInstruments(std::span<const InstrumentGroup> inGroups)
     {
@@ -368,8 +371,7 @@ std::expected<Transcriber, Error> Transcriber::load(const std::filesystem::path&
         options.device = inOptions.device;
         options.should_cancel = std::move(inOptions.should_cancel);
         options.on_progress = std::move(inOptions.on_progress);
-        // The hparams are checked against these constants below.
-        options.n_ctx = requiredContext(melFramesPerChunk(SAMPLE_RATE / Vocabulary::FRAME_RATE));
+        options.n_ctx = CHUNK_CONTEXT;
 
         Model model = Model::load(inGgufPath, options);
         const Hparams& hp = model.hparams();
@@ -397,7 +399,7 @@ std::expected<std::vector<DeviceSupport>, Error> Transcriber::checkDevices(const
 {
     try {
         ModelOptions options;
-        options.n_ctx = requiredContext(melFramesPerChunk(SAMPLE_RATE / Vocabulary::FRAME_RATE));
+        options.n_ctx = CHUNK_CONTEXT;
         return Model::checkDevices(inGgufPath, options);
     } catch (const Exception& e) {
         return std::unexpected(e.error());
