@@ -42,6 +42,9 @@ The model does not produce:
 
 ## Pipeline
 
+`Transcriber` adds a lead-in and a silence gate around this pipeline; with both
+off it is the reference's ([`API.md`](API.md#lead-in-and-silence-gate)).
+
 ```
 16 kHz mono float32 (whole signal)
   │  split into 5 s chunks; the last is zero-padded, and the padding is not masked

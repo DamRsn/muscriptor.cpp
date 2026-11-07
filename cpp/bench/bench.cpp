@@ -493,7 +493,9 @@ int main(int argc, char** argv)
             std::printf("weights   %s\n", args.weights.filename().string().c_str());
             printDevice(transcriber->device());
             std::printf("load      %8.1f ms\n", loaded_ms);
-            std::printf("audio     %8.2f s   (%d chunks)\n", audio_s, msl::Transcriber::chunkCount(signal.size()));
+            std::printf("audio     %8.2f s   (%d chunks)\n",
+                        audio_s,
+                        msl::Transcriber::chunkCount(signal.size(), transcribe_options));
             std::printf("transcribe %7.2f s\n", elapsed_ms / 1000.0);
             std::printf("speed     %8.2fx real time\n", audio_s / (elapsed_ms / 1000.0));
             std::printf("notes     %8zu\n", notes->size());

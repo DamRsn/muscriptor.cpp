@@ -152,11 +152,14 @@ void requireResumingReproduces(const std::string& inVariant)
 
 TEST_CASE("chunking matches the reference's ceil division", "[transcriber]")
 {
-    CHECK(Transcriber::chunkCount(0) == 0);
-    CHECK(Transcriber::chunkCount(1) == 1);
-    CHECK(Transcriber::chunkCount(Transcriber::SEGMENT_SAMPLES) == 1);
-    CHECK(Transcriber::chunkCount(Transcriber::SEGMENT_SAMPLES + 1) == 2);
-    CHECK(Transcriber::chunkCount(3 * Transcriber::SEGMENT_SAMPLES) == 3);
+    TranscribeOptions none;
+    none.lead_in.enabled = false;
+
+    CHECK(Transcriber::chunkCount(0, none) == 0);
+    CHECK(Transcriber::chunkCount(1, none) == 1);
+    CHECK(Transcriber::chunkCount(Transcriber::SEGMENT_SAMPLES, none) == 1);
+    CHECK(Transcriber::chunkCount(Transcriber::SEGMENT_SAMPLES + 1, none) == 2);
+    CHECK(Transcriber::chunkCount(3 * Transcriber::SEGMENT_SAMPLES, none) == 3);
 }
 
 TEST_CASE("loading reports why it failed rather than throwing", "[transcriber]")
@@ -175,7 +178,7 @@ TEST_CASE("loading reports why it failed rather than throwing", "[transcriber]")
 
 TEST_CASE("an empty signal transcribes to no notes", "[transcriber]")
 {
-    const std::expected<std::vector<Note>, Error> notes = sharedTranscriber().transcribe({});
+    const std::expected<std::vector<Note>, Error> notes = sharedTranscriber().transcribe({}, {});
     REQUIRE(notes.has_value());
     CHECK(notes->empty());
 }
@@ -229,7 +232,7 @@ TEST_CASE("returning false from the callback cancels", "[transcriber]")
 
     // And the instance is reusable: state is cleared on entry, not on exit, so a
     // cancelled run leaves nothing for the next one to inherit.
-    const std::expected<std::vector<Note>, Error> again = sharedTranscriber().transcribe({});
+    const std::expected<std::vector<Note>, Error> again = sharedTranscriber().transcribe({}, {});
     REQUIRE(again.has_value());
     CHECK(again->empty());
 }
