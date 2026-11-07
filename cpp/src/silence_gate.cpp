@@ -93,10 +93,8 @@ bool SilenceGate::covers(double inStart, double inEnd) const
 
 std::optional<Note> SilenceGate::apply(Note inNote) const
 {
-    for (const Region& region: mRegions) {
-        if (inNote.onset >= region.start + mRelease && inNote.onset < region.end - ONSET_LEAD) {
-            return std::nullopt;
-        }
+    if (_drops(inNote.onset)) {
+        return std::nullopt;
     }
 
     inNote.offset = std::min(inNote.offset, cutPoint(inNote.onset));
@@ -105,6 +103,10 @@ std::optional<Note> SilenceGate::apply(Note inNote) const
 
 double SilenceGate::cutPoint(double inOnset) const
 {
+    if (_drops(inOnset)) {
+        return INF;
+    }
+
     for (const Region& region: mRegions) {
         if (region.start + mRelease > inOnset) {
             return std::max(region.start + mRelease, inOnset + MINIMUM_NOTE_DURATION_SECONDS);
@@ -112,6 +114,13 @@ double SilenceGate::cutPoint(double inOnset) const
     }
 
     return INF;
+}
+
+bool SilenceGate::_drops(double inOnset) const
+{
+    return std::any_of(mRegions.begin(), mRegions.end(), [&](const Region& inRegion) {
+        return inOnset >= inRegion.start + mRelease && inOnset < inRegion.end - ONSET_LEAD;
+    });
 }
 
 } // namespace msl

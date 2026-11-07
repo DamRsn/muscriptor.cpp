@@ -40,10 +40,16 @@ public:
      */
     std::optional<Note> apply(Note inNote) const;
 
-    /** @return The earliest offset `apply` can give a note starting at `inOnset`, or infinity. */
+    /**
+     * @return The earliest offset `apply` can give a note starting at
+     *         `inOnset`, or infinity if it drops or never cuts such a note.
+     */
     double cutPoint(double inOnset) const;
 
 private:
+    /** @return Whether a note starting at `inOnset` started in silence. */
+    bool _drops(double inOnset) const;
+
     struct Region {
         double start = 0.0;
         double end = 0.0;
