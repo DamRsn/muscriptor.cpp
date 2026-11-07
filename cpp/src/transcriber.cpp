@@ -74,11 +74,6 @@ namespace
             std::llround(std::min(inLeadIn.duration, Transcriber::SEGMENT_DURATION) * Vocabulary::FRAME_RATE));
     }
 
-    long long millionths(double inValue)
-    {
-        return std::llround(inValue * 1e6);
-    }
-
     CorrectionSettings correctionSettings(const TranscribeOptions& inOptions)
     {
         CorrectionSettings settings;
@@ -86,9 +81,9 @@ namespace
 
         if (inOptions.silence_gate.enabled) {
             settings.silence_gate = true;
-            settings.gate_threshold = millionths(inOptions.silence_gate.threshold_dbfs);
-            settings.gate_min_duration = millionths(inOptions.silence_gate.min_duration);
-            settings.gate_release = millionths(inOptions.silence_gate.release);
+            settings.gate_threshold = inOptions.silence_gate.threshold_dbfs;
+            settings.gate_min_duration = inOptions.silence_gate.min_duration;
+            settings.gate_release = inOptions.silence_gate.release;
         }
 
         return settings;

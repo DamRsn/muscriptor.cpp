@@ -14,17 +14,13 @@
 namespace msl
 {
 
-/**
- * The lead-in and silence-gate settings, precisely enough to tell two calls'
- * apart. The gate's are in millionths of a dB and of a second, and zero when
- * it is off.
- */
+/** The lead-in and silence-gate settings. The gate's are zero when it is off. */
 struct CorrectionSettings {
     int lead_in_frames = 0;
     bool silence_gate = false;
-    long long gate_threshold = 0;
-    long long gate_min_duration = 0;
-    long long gate_release = 0;
+    float gate_threshold = 0.0f;
+    double gate_min_duration = 0.0;
+    double gate_release = 0.0;
 
     bool operator==(const CorrectionSettings&) const = default;
 };
@@ -40,8 +36,9 @@ struct CorrectionSettings {
  *     prelude 1               prelude_forcing
  *     instruments 2 33 35     count, then the selection
  *     leadin 20               lead-in frames
- *     gate 1 -60000000 300000 100000
- *                             silence gate: on, threshold, min duration, release
+ *     gate 1 3262119936 4599075939470750515 4591870180066957722
+ *                             silence gate: on, then the bit patterns of
+ *                             threshold (float), min duration, release
  *     decoded 2               chunks done
  *     prologue 0              1 if the last chunk never reached its tie token
  *     open 2                  count, then: program pitch onset

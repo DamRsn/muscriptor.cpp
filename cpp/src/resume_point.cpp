@@ -5,11 +5,15 @@
 #include "vocabulary.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <charconv>
 #include <cmath>
+#include <concepts>
+#include <cstdint>
 #include <limits>
 #include <locale>
 #include <sstream>
+#include <type_traits>
 
 namespace msl
 {
@@ -18,22 +22,35 @@ namespace
 {
 
     constexpr std::string_view MAGIC = "muscriptor-resume";
-    constexpr long long FORMAT_VERSION = 2;
+    constexpr int FORMAT_VERSION = 2;
 
-    constexpr long long MAX_VALUE = std::numeric_limits<int>::max();
-    constexpr long long MAX_SETTING = std::numeric_limits<long long>::max();
-    constexpr long long MAX_PITCH = Vocabulary::PITCH_COUNT - 1;
-    constexpr long long MAX_PROGRAM = Vocabulary::PROGRAM_COUNT - 1;
+    constexpr int MAX_VALUE = std::numeric_limits<int>::max();
+    constexpr int MAX_PITCH = Vocabulary::PITCH_COUNT - 1;
+    constexpr int MAX_PROGRAM = Vocabulary::PROGRAM_COUNT - 1;
+
+    /** The unsigned integer with the same bits as `T`. */
+    template <std::floating_point T>
+    using Bits = std::conditional_t<sizeof(T) == sizeof(std::uint32_t), std::uint32_t, std::uint64_t>;
+
+    /**
+     * Settings are stored as their bit pattern: exact, and independent of
+     * locale and of floating-point `to_chars`, which macOS 11 lacks.
+     */
+    template <std::floating_point T>
+    Bits<T> toBits(T inValue)
+    {
+        return std::bit_cast<Bits<T>>(inValue);
+    }
 
     /** Times are stored as whole frames, so no float goes through text. */
-    double fromFrames(long long inFrames)
+    double fromFrames(int inFrames)
     {
         return static_cast<double>(inFrames) / Vocabulary::FRAME_RATE;
     }
 
-    long long toFrames(double inSeconds)
+    int toFrames(double inSeconds)
     {
-        const long long frames = std::llround(inSeconds * Vocabulary::FRAME_RATE);
+        const int frames = static_cast<int>(std::lround(inSeconds * Vocabulary::FRAME_RATE));
 
         // Exact on purpose: a restored time has to be the very double decoding produced.
         if (fromFrames(frames) != inSeconds) {
@@ -74,10 +91,11 @@ namespace
             }
         }
 
-        long long number(long long inMin, long long inMax)
+        template <typename T>
+        T number(T inMin, T inMax)
         {
             const std::string_view text = word();
-            long long value = 0;
+            T value = 0;
             const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
 
             if (error != std::errc {} || end != text.data() + text.size() || value < inMin || value > inMax) {
@@ -86,6 +104,13 @@ namespace
             }
 
             return value;
+        }
+
+        /** Reads a value `toBits` wrote. */
+        template <std::floating_point T>
+        T bits()
+        {
+            return std::bit_cast<T>(number<Bits<T>>(0, std::numeric_limits<Bits<T>>::max()));
         }
 
         bool failed() const { return mFailed; }
@@ -117,8 +142,8 @@ std::string serializeResumeState(const ResumeState& inState)
 
     const CorrectionSettings& corrections = inState.corrections;
     out << "\nleadin " << corrections.lead_in_frames << '\n';
-    out << "gate " << (corrections.silence_gate ? 1 : 0) << ' ' << corrections.gate_threshold << ' '
-        << corrections.gate_min_duration << ' ' << corrections.gate_release << '\n';
+    out << "gate " << (corrections.silence_gate ? 1 : 0) << ' ' << toBits(corrections.gate_threshold) << ' '
+        << toBits(corrections.gate_min_duration) << ' ' << toBits(corrections.gate_release) << '\n';
     out << "decoded " << inState.decoded << '\n';
     out << "prologue " << (inState.in_prologue ? 1 : 0) << '\n';
     out << "open " << inState.open.size() << '\n';
@@ -151,40 +176,40 @@ std::optional<ResumeState> parseResumeState(std::string_view inText)
     in.number(FORMAT_VERSION, FORMAT_VERSION);
 
     in.expect("samples");
-    state.n_samples = static_cast<std::size_t>(in.number(0, std::numeric_limits<long long>::max()));
+    state.n_samples = in.number<std::size_t>(0, std::numeric_limits<std::size_t>::max());
 
     in.expect("prelude");
     state.prelude_forcing = in.number(0, 1) == 1;
 
     in.expect("instruments");
-    const long long n_instruments = in.number(0, MAX_VALUE);
+    const int n_instruments = in.number(0, MAX_VALUE);
 
-    for (long long i = 0; i < n_instruments && !in.failed(); ++i) {
+    for (int i = 0; i < n_instruments && !in.failed(); ++i) {
         state.instruments.push_back(static_cast<InstrumentGroup>(in.number(0, MAX_VALUE)));
     }
 
     in.expect("leadin");
-    state.corrections.lead_in_frames = static_cast<int>(in.number(0, MAX_VALUE));
+    state.corrections.lead_in_frames = in.number(0, MAX_VALUE);
 
     in.expect("gate");
     state.corrections.silence_gate = in.number(0, 1) == 1;
-    state.corrections.gate_threshold = in.number(std::numeric_limits<long long>::min(), MAX_SETTING);
-    state.corrections.gate_min_duration = in.number(0, MAX_SETTING);
-    state.corrections.gate_release = in.number(0, MAX_SETTING);
+    state.corrections.gate_threshold = in.bits<float>();
+    state.corrections.gate_min_duration = in.bits<double>();
+    state.corrections.gate_release = in.bits<double>();
 
     in.expect("decoded");
-    state.decoded = static_cast<int>(in.number(1, MAX_VALUE));
+    state.decoded = in.number(1, MAX_VALUE);
 
     in.expect("prologue");
     state.in_prologue = in.number(0, 1) == 1;
 
     in.expect("open");
-    const long long n_open = in.number(0, MAX_VALUE);
+    const int n_open = in.number(0, MAX_VALUE);
 
-    for (long long i = 0; i < n_open && !in.failed(); ++i) {
+    for (int i = 0; i < n_open && !in.failed(); ++i) {
         OpenNoteTracker::OpenNote note;
-        note.key.program = static_cast<int>(in.number(0, MAX_PROGRAM));
-        note.key.pitch = static_cast<int>(in.number(0, MAX_PITCH));
+        note.key.program = in.number(0, MAX_PROGRAM);
+        note.key.pitch = in.number(0, MAX_PITCH);
         note.onset = fromFrames(in.number(0, MAX_VALUE));
 
         // The tracker holds at most one note per key.
@@ -196,20 +221,20 @@ std::optional<ResumeState> parseResumeState(std::string_view inText)
     }
 
     in.expect("withheld");
-    const long long n_withheld = in.number(0, MAX_VALUE);
+    const int n_withheld = in.number(0, MAX_VALUE);
 
-    for (long long i = 0; i < n_withheld && !in.failed(); ++i) {
+    for (int i = 0; i < n_withheld && !in.failed(); ++i) {
         const std::string_view kind = in.word();
 
         TrackedNote tracked;
 
         if (kind == "d") {
             tracked.drum_hit = true;
-            tracked.key = {DRUM_PROGRAM, static_cast<int>(in.number(0, MAX_PITCH))};
+            tracked.key = {DRUM_PROGRAM, in.number(0, MAX_PITCH)};
             tracked.note.onset = fromFrames(in.number(0, MAX_VALUE));
         } else if (kind == "n") {
-            tracked.key.program = static_cast<int>(in.number(0, MAX_PROGRAM));
-            tracked.key.pitch = static_cast<int>(in.number(0, MAX_PITCH));
+            tracked.key.program = in.number(0, MAX_PROGRAM);
+            tracked.key.pitch = in.number(0, MAX_PITCH);
             tracked.note.onset = fromFrames(in.number(0, MAX_VALUE));
             tracked.note.offset = fromFrames(in.number(0, MAX_VALUE));
         } else {
