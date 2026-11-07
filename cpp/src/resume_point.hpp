@@ -29,9 +29,10 @@ struct CorrectionSettings {
  * Everything `transcribe` carries from one chunk to the next, plus what the
  * resumed call has to match.
  *
- * Serialised as whitespace-separated text, times in whole 10 ms frames:
+ * Serialised as whitespace-separated text, times in whole 10 ms frames of the
+ * signal, negative inside the lead-in:
  *
- *     muscriptor-resume 1
+ *     muscriptor-resume 2
  *     samples 240000          signal length
  *     prelude 1               prelude_forcing
  *     instruments 2 33 35     count, then the selection

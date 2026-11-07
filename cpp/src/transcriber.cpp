@@ -62,6 +62,7 @@ namespace
     }
 
     constexpr int FRAME_SAMPLES = Transcriber::SAMPLE_RATE / Vocabulary::FRAME_RATE;
+    constexpr int SEGMENT_FRAMES = Transcriber::SEGMENT_SAMPLES / FRAME_SAMPLES;
 
     /** @return The lead-in in whole frames; 0 when it is off. */
     int leadInFrames(const LeadInOptions& inLeadIn)
@@ -168,21 +169,17 @@ private:
     /** One chunk of the lead-in followed by the signal, zero-padded to a full segment. */
     void _fillChunk(std::span<const float> inSamples, int inIndex);
 
-    /** @return A decoded time, in seconds into the lead-in and signal, as seconds into the signal. */
-    double _toSignalTime(double inDecodedTime) const;
+    /** @return Where chunk `inChunk` starts, in seconds into the signal: the lead-in puts it that much earlier. */
+    double _seekTime(int inChunk) const;
 
-    /**
-     * @return Decoded notes in signal time, gated, clamped to the start of the
-     *         signal, and sorted.
-     */
+    /** @return Decoded notes gated, clamped to the start of the signal, and sorted. */
     std::vector<Note> _release(const std::vector<Note>& inNotes) const;
 
     /**
-     * @return `finalized_through` after the chunk ending at `inDecodedTime`:
-     *         that, in signal time, or less if the gate may still cut a note
-     *         not reported yet.
+     * @return `finalized_through` after the chunk ending at `inTime`: that, or
+     *         less if the gate may still cut a note not reported yet.
      */
-    double _finalizedThrough(double inDecodedTime, int inChunk) const;
+    double _finalizedThrough(double inTime, int inChunk) const;
 
     /**
      * Rebuild the decode state `inResumePoint` describes, after `_configure`.
@@ -276,7 +273,7 @@ int Transcriber::Impl::_restore(std::string_view inResumePoint,
                          last);
     }
 
-    mTracker.restore(std::move(state->open), last * SEGMENT_DURATION, state->in_prologue);
+    mTracker.restore(std::move(state->open), _seekTime(last), state->in_prologue);
 
     return state->decoded;
 }
@@ -320,28 +317,16 @@ void Transcriber::Impl::_fillChunk(std::span<const float> inSamples, int inIndex
     }
 }
 
-double Transcriber::Impl::_toSignalTime(double inDecodedTime) const
+double Transcriber::Impl::_seekTime(int inChunk) const
 {
-    const double frames = inDecodedTime * Vocabulary::FRAME_RATE;
-    const double whole = std::round(frames);
-
-    // On the frame grid, computed the way decoding computes its times, so a
-    // shifted onset is the same double a decoded one would be.
-    if (std::abs(frames - whole) < 1e-6) {
-        return (whole - mCorrections.lead_in_frames) / Vocabulary::FRAME_RATE;
-    }
-
-    return inDecodedTime - static_cast<double>(mCorrections.lead_in_frames) / Vocabulary::FRAME_RATE;
+    return static_cast<double>(inChunk * SEGMENT_FRAMES - mCorrections.lead_in_frames) / Vocabulary::FRAME_RATE;
 }
 
 std::vector<Note> Transcriber::Impl::_release(const std::vector<Note>& inNotes) const
 {
     std::vector<Note> released;
 
-    for (Note note: inNotes) {
-        note.onset = _toSignalTime(note.onset);
-        note.offset = _toSignalTime(note.offset);
-
+    for (const Note& note: inNotes) {
         std::optional<Note> gated = mGate.apply(note);
 
         if (!gated || gated->onset < -ONSET_LEAD) {
@@ -360,17 +345,17 @@ std::vector<Note> Transcriber::Impl::_release(const std::vector<Note>& inNotes) 
     return released;
 }
 
-double Transcriber::Impl::_finalizedThrough(double inDecodedTime, int inChunk) const
+double Transcriber::Impl::_finalizedThrough(double inTime, int inChunk) const
 {
-    double horizon = _toSignalTime(inDecodedTime);
+    double horizon = inTime;
 
     for (const OpenNoteTracker::OpenNote& open: mTracker.openNotes()) {
-        horizon = std::min(horizon, mGate.cutPoint(_toSignalTime(open.onset)));
+        horizon = std::min(horizon, mGate.cutPoint(open.onset));
     }
 
     for (const TrackedNote& tracked: mAssembler.closedNotes()) {
         if (tracked.chunk_index == inChunk) {
-            horizon = std::min(horizon, mGate.cutPoint(_toSignalTime(tracked.note.onset)));
+            horizon = std::min(horizon, mGate.cutPoint(tracked.note.onset));
         }
     }
 
@@ -405,10 +390,10 @@ std::expected<std::vector<Note>, Error> Transcriber::Impl::transcribe(std::span<
         }
 
         ChunkBoundary boundary;
-        boundary.seek_time = chunk * SEGMENT_DURATION;
+        boundary.seek_time = _seekTime(chunk);
 
         if (chunk + 1 < n_chunks) {
-            boundary.next_seek_time = (chunk + 1) * SEGMENT_DURATION;
+            boundary.next_seek_time = _seekTime(chunk + 1);
         }
 
         // Feed the boundary before reading open keys: it settles a previous
@@ -416,9 +401,7 @@ std::expected<std::vector<Note>, Error> Transcriber::Impl::transcribe(std::span<
         // decoder's own view.
         mAssembler.apply(mTracker.feed(boundary), chunk);
 
-        const double chunk_start = _toSignalTime(boundary.seek_time);
-
-        if (mGate.covers(chunk_start, chunk_start + SEGMENT_DURATION)) {
+        if (mGate.covers(boundary.seek_time, boundary.seek_time + SEGMENT_DURATION)) {
             // Decoded as an empty tie section, which closes every open note,
             // instead of letting the model carry them on through the silence.
             mAssembler.apply(mTracker.feed(Vocabulary::TIE_FIRST), chunk);
@@ -435,7 +418,7 @@ std::expected<std::vector<Note>, Error> Transcriber::Impl::transcribe(std::span<
             update.new_notes = ready;
             // Chunks 0 through chunk-1 have been released, and each of them
             // closed only notes ending inside its own window.
-            update.finalized_through = _finalizedThrough(chunk * SEGMENT_DURATION, chunk);
+            update.finalized_through = _finalizedThrough(boundary.seek_time, chunk);
             update.progress = static_cast<float>(chunk + 1) / static_cast<float>(n_chunks);
             update.resume_point = _resumePoint(inSamples.size(), inOptions, chunk + 1);
 
@@ -459,7 +442,7 @@ std::expected<std::vector<Note>, Error> Transcriber::Impl::transcribe(std::span<
             // An under-claim: the last chunk has no window past it, so a note
             // there may end fractionally later. Claiming less than is known
             // costs a host nothing; claiming more would cost it a note.
-            update.finalized_through = std::max(_toSignalTime(n_chunks * SEGMENT_DURATION), 0.0);
+            update.finalized_through = std::max(_seekTime(n_chunks), 0.0);
             update.progress = 1.0f;
 
             if (!inCallback(update)) {

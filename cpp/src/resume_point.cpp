@@ -210,7 +210,7 @@ std::optional<ResumeState> parseResumeState(std::string_view inText)
         OpenNoteTracker::OpenNote note;
         note.key.program = in.number(0, MAX_PROGRAM);
         note.key.pitch = in.number(0, MAX_PITCH);
-        note.onset = fromFrames(in.number(0, MAX_VALUE));
+        note.onset = fromFrames(in.number(-MAX_VALUE, MAX_VALUE));
 
         // The tracker holds at most one note per key.
         if (std::any_of(state.open.begin(), state.open.end(), [&note](const auto& n) { return n.key == note.key; })) {
@@ -231,12 +231,12 @@ std::optional<ResumeState> parseResumeState(std::string_view inText)
         if (kind == "d") {
             tracked.drum_hit = true;
             tracked.key = {DRUM_PROGRAM, in.number(0, MAX_PITCH)};
-            tracked.note.onset = fromFrames(in.number(0, MAX_VALUE));
+            tracked.note.onset = fromFrames(in.number(-MAX_VALUE, MAX_VALUE));
         } else if (kind == "n") {
             tracked.key.program = in.number(0, MAX_PROGRAM);
             tracked.key.pitch = in.number(0, MAX_PITCH);
-            tracked.note.onset = fromFrames(in.number(0, MAX_VALUE));
-            tracked.note.offset = fromFrames(in.number(0, MAX_VALUE));
+            tracked.note.onset = fromFrames(in.number(-MAX_VALUE, MAX_VALUE));
+            tracked.note.offset = fromFrames(in.number(-MAX_VALUE, MAX_VALUE));
         } else {
             return std::nullopt;
         }
