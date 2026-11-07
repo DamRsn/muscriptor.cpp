@@ -67,12 +67,7 @@ namespace
     /** @return The lead-in in whole frames; 0 when it is off. */
     int leadInFrames(const LeadInOptions& inLeadIn)
     {
-        if (!inLeadIn.enabled || !(inLeadIn.duration > 0.0)) {
-            return 0;
-        }
-
-        return static_cast<int>(
-            std::llround(std::min(inLeadIn.duration, Transcriber::SEGMENT_DURATION) * Vocabulary::FRAME_RATE));
+        return inLeadIn.enabled ? static_cast<int>(std::lround(inLeadIn.duration * Vocabulary::FRAME_RATE)) : 0;
     }
 
     CorrectionSettings correctionSettings(const TranscribeOptions& inOptions)
@@ -172,7 +167,7 @@ private:
     /** @return Where chunk `inChunk` starts, in seconds into the signal: the lead-in puts it that much earlier. */
     double _seekTime(int inChunk) const;
 
-    /** @return Decoded notes gated, clamped to the start of the signal, and sorted. */
+    /** @return Decoded notes clamped to the start of the signal, then gated, and sorted. */
     std::vector<Note> _release(const std::vector<Note>& inNotes) const;
 
     /**
@@ -326,19 +321,20 @@ std::vector<Note> Transcriber::Impl::_release(const std::vector<Note>& inNotes) 
 {
     std::vector<Note> released;
 
-    for (const Note& note: inNotes) {
-        std::optional<Note> gated = mGate.apply(note);
-
-        if (!gated || gated->onset < -ONSET_LEAD) {
+    for (Note note: inNotes) {
+        // Decoded from the lead-in: clamped to the start of the signal if close enough, dropped otherwise.
+        if (note.onset < -ONSET_LEAD) {
             continue;
         }
 
-        if (gated->onset < 0.0) {
-            gated->onset = 0.0;
-            gated->offset = std::max(gated->offset, MINIMUM_NOTE_DURATION_SECONDS);
+        if (note.onset < 0.0) {
+            note.onset = 0.0;
+            note.offset = std::max(note.offset, MINIMUM_NOTE_DURATION_SECONDS);
         }
 
-        released.push_back(*gated);
+        if (std::optional<Note> gated = mGate.apply(note)) {
+            released.push_back(*gated);
+        }
     }
 
     sortNotes(released);
@@ -375,7 +371,7 @@ std::expected<std::vector<Note>, Error> Transcriber::Impl::transcribe(std::span<
 
     mGate = inOptions.silence_gate.enabled ? SilenceGate(inSamples, inOptions.silence_gate) : SilenceGate();
 
-    const int n_chunks = Transcriber::chunkCount(inSamples.size(), inOptions.lead_in);
+    const int n_chunks = Transcriber::chunkCount(inSamples.size(), inOptions);
     int first_chunk = 0;
 
     if (!inOptions.resume_from.empty()) {
@@ -543,13 +539,13 @@ Transcriber::~Transcriber() = default;
 Transcriber::Transcriber(Transcriber&&) noexcept = default;
 Transcriber& Transcriber::operator=(Transcriber&&) noexcept = default;
 
-int Transcriber::chunkCount(std::size_t inNSamples, const LeadInOptions& inLeadIn)
+int Transcriber::chunkCount(std::size_t inNSamples, const TranscribeOptions& inOptions)
 {
     if (inNSamples == 0) {
         return 0;
     }
 
-    const std::size_t padded = inNSamples + static_cast<std::size_t>(leadInFrames(inLeadIn)) * FRAME_SAMPLES;
+    const std::size_t padded = inNSamples + static_cast<std::size_t>(leadInFrames(inOptions.lead_in)) * FRAME_SAMPLES;
     return static_cast<int>((padded + SEGMENT_SAMPLES - 1) / SEGMENT_SAMPLES);
 }
 

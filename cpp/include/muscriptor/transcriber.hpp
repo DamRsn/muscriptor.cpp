@@ -242,11 +242,14 @@ public:
      * @return Every note, sorted by (onset, is_drum, program, pitch, offset).
      */
     std::expected<std::vector<Note>, Error> transcribe(std::span<const float> inSamples,
-                                                       const TranscribeOptions& inOptions = {},
+                                                       const TranscribeOptions& inOptions,
                                                        const NoteCallback& inCallback = {});
 
-    /** @return Number of 5 s chunks `inNSamples` will be split into, with `inLeadIn` ahead of them. */
-    static int chunkCount(std::size_t inNSamples, const LeadInOptions& inLeadIn = {});
+    /**
+     * @return Number of 5 s chunks `transcribe` splits `inNSamples` into with
+     *         `inOptions`, lead-in included. Meaningless for options it rejects.
+     */
+    static int chunkCount(std::size_t inNSamples, const TranscribeOptions& inOptions);
 
 private:
     Transcriber();

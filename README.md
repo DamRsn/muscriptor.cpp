@@ -73,7 +73,8 @@ if (!transcriber) {
 }
 
 // 16 kHz mono float32, the whole signal.
-auto notes = transcriber->transcribe(samples);
+msl::TranscribeOptions options;
+auto notes = transcriber->transcribe(samples, options);
 ```
 
 ## Using it from CMake
