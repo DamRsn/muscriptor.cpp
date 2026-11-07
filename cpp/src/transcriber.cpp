@@ -64,6 +64,19 @@ namespace
     constexpr int FRAME_SAMPLES = Transcriber::SAMPLE_RATE / Vocabulary::FRAME_RATE;
     constexpr int SEGMENT_FRAMES = Transcriber::SEGMENT_SAMPLES / FRAME_SAMPLES;
 
+    /**
+     * @return A decoded onset as reported: clamped to the start of the signal
+     *         if decoded just before it, nothing if earlier.
+     */
+    std::optional<double> signalOnset(double inOnset)
+    {
+        if (inOnset < -ONSET_LEAD) {
+            return std::nullopt;
+        }
+
+        return std::max(inOnset, 0.0);
+    }
+
     /** @return The lead-in in whole frames; 0 when it is off. */
     int leadInFrames(const LeadInOptions& inLeadIn)
     {
@@ -322,14 +335,15 @@ std::vector<Note> Transcriber::Impl::_release(const std::vector<Note>& inNotes) 
     std::vector<Note> released;
 
     for (Note note: inNotes) {
-        // Decoded from the lead-in: clamped to the start of the signal if close enough, dropped otherwise.
-        if (note.onset < -ONSET_LEAD) {
+        const std::optional<double> onset = signalOnset(note.onset);
+
+        if (!onset) {
             continue;
         }
 
-        if (note.onset < 0.0) {
-            note.onset = 0.0;
-            note.offset = std::max(note.offset, MINIMUM_NOTE_DURATION_SECONDS);
+        if (*onset != note.onset) {
+            note.onset = *onset;
+            note.offset = std::max(note.offset, *onset + MINIMUM_NOTE_DURATION_SECONDS);
         }
 
         if (std::optional<Note> gated = mGate.apply(note)) {
@@ -346,12 +360,16 @@ double Transcriber::Impl::_finalizedThrough(double inTime, int inChunk) const
     double horizon = inTime;
 
     for (const OpenNoteTracker::OpenNote& open: mTracker.openNotes()) {
-        horizon = std::min(horizon, mGate.cutPoint(open.onset));
+        if (const std::optional<double> onset = signalOnset(open.onset)) {
+            horizon = std::min(horizon, mGate.cutPoint(*onset));
+        }
     }
 
     for (const TrackedNote& tracked: mAssembler.closedNotes()) {
-        if (tracked.chunk_index == inChunk) {
-            horizon = std::min(horizon, mGate.cutPoint(tracked.note.onset));
+        const std::optional<double> onset = signalOnset(tracked.note.onset);
+
+        if (tracked.chunk_index == inChunk && onset) {
+            horizon = std::min(horizon, mGate.cutPoint(*onset));
         }
     }
 
