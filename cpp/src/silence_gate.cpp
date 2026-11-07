@@ -71,7 +71,10 @@ SilenceGate::SilenceGate(std::span<const float> inSamples, const SilenceGateOpti
         const bool at_start = first == 0;
         const bool at_end = last == n_frames;
 
-        if (at_start || at_end || static_cast<double>(last - first) * frame >= inOptions.min_duration) {
+        // A run shorter than the release would only cut notes after the sound is back.
+        const double min_length = std::max(inOptions.min_duration, inOptions.release);
+
+        if (at_start || at_end || static_cast<double>(last - first) * frame >= min_length) {
             mRegions.push_back({at_start ? -INF : static_cast<double>(first) * frame,
                                 at_end ? INF : static_cast<double>(last) * frame});
         }

@@ -156,8 +156,8 @@ every time reported. As a result:
 **Silence gate** (`SilenceGateOptions`). Where the input goes silent, the model
 can keep repeating the last notes it heard, and prelude forcing carries them
 into the following chunks. The gate measures the input's RMS over 10 ms
-frames. A run of frames below `threshold_dbfs`, at least `min_duration` long,
-is a silent region; a run touching either end of the signal always is, and
+frames. A run of frames below `threshold_dbfs`, at least `min_duration` and
+`release` long, is a silent region; a run touching either end of the signal always is, and
 everything before and after the signal counts as silent. Then:
 
 - A chunk that lies entirely within a silent region, counted from `release`
