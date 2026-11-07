@@ -152,11 +152,13 @@ void requireResumingReproduces(const std::string& inVariant)
 
 TEST_CASE("chunking matches the reference's ceil division", "[transcriber]")
 {
-    CHECK(Transcriber::chunkCount(0) == 0);
-    CHECK(Transcriber::chunkCount(1) == 1);
-    CHECK(Transcriber::chunkCount(Transcriber::SEGMENT_SAMPLES) == 1);
-    CHECK(Transcriber::chunkCount(Transcriber::SEGMENT_SAMPLES + 1) == 2);
-    CHECK(Transcriber::chunkCount(3 * Transcriber::SEGMENT_SAMPLES) == 3);
+    const LeadInOptions none {.enabled = false};
+
+    CHECK(Transcriber::chunkCount(0, none) == 0);
+    CHECK(Transcriber::chunkCount(1, none) == 1);
+    CHECK(Transcriber::chunkCount(Transcriber::SEGMENT_SAMPLES, none) == 1);
+    CHECK(Transcriber::chunkCount(Transcriber::SEGMENT_SAMPLES + 1, none) == 2);
+    CHECK(Transcriber::chunkCount(3 * Transcriber::SEGMENT_SAMPLES, none) == 3);
 }
 
 TEST_CASE("loading reports why it failed rather than throwing", "[transcriber]")

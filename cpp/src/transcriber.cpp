@@ -8,9 +8,11 @@
 #include "note_assembler.hpp"
 #include "open_note_tracker.hpp"
 #include "resume_point.hpp"
+#include "silence_gate.hpp"
 #include "vocabulary.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <exception>
 #include <iterator>
 #include <new>
@@ -57,6 +59,60 @@ namespace
         }
 
         return unique;
+    }
+
+    constexpr int FRAME_SAMPLES = Transcriber::SAMPLE_RATE / Vocabulary::FRAME_RATE;
+
+    /** @return The lead-in in whole frames; 0 when it is off. */
+    int leadInFrames(const LeadInOptions& inLeadIn)
+    {
+        if (!inLeadIn.enabled || !(inLeadIn.duration > 0.0)) {
+            return 0;
+        }
+
+        return static_cast<int>(
+            std::llround(std::min(inLeadIn.duration, Transcriber::SEGMENT_DURATION) * Vocabulary::FRAME_RATE));
+    }
+
+    long long millionths(double inValue)
+    {
+        return std::llround(inValue * 1e6);
+    }
+
+    CorrectionSettings correctionSettings(const TranscribeOptions& inOptions)
+    {
+        CorrectionSettings settings;
+        settings.lead_in_frames = leadInFrames(inOptions.lead_in);
+
+        if (inOptions.silence_gate.enabled) {
+            settings.silence_gate = true;
+            settings.gate_threshold = millionths(inOptions.silence_gate.threshold_dbfs);
+            settings.gate_min_duration = millionths(inOptions.silence_gate.min_duration);
+            settings.gate_release = millionths(inOptions.silence_gate.release);
+        }
+
+        return settings;
+    }
+
+    /** Throws `Error::InvalidArgument` for a lead-in or gate setting out of range. */
+    void validateCorrections(const TranscribeOptions& inOptions)
+    {
+        const LeadInOptions& lead_in = inOptions.lead_in;
+
+        if (lead_in.enabled && !(lead_in.duration >= 0.0 && lead_in.duration <= Transcriber::SEGMENT_DURATION)) {
+            throw Exception(
+                Error::InvalidArgument,
+                msl::format("lead-in of {} s is outside 0 to {} s", lead_in.duration, Transcriber::SEGMENT_DURATION));
+        }
+
+        const SilenceGateOptions& gate = inOptions.silence_gate;
+
+        if (gate.enabled
+            && !(std::isfinite(gate.threshold_dbfs) && std::isfinite(gate.min_duration) && gate.min_duration >= 0.0
+                 && std::isfinite(gate.release) && gate.release >= 0.0)) {
+            throw Exception(Error::InvalidArgument,
+                            "silence gate needs a finite threshold and a finite, non-negative duration and release");
+        }
     }
 
     /** Installs a cancel predicate on a model for one call, and removes it on every exit. */
@@ -108,8 +164,30 @@ private:
      */
     void _configure(const TranscribeOptions& inOptions);
 
-    /** One chunk's samples, zero-padded to a full segment. */
+    /**
+     * Run the model on chunk `inChunk`, after its boundary has been fed, and
+     * feed what it decodes.
+     */
+    void _decodeChunk(std::span<const float> inSamples, const TranscribeOptions& inOptions, int inChunk);
+
+    /** One chunk of the lead-in followed by the signal, zero-padded to a full segment. */
     void _fillChunk(std::span<const float> inSamples, int inIndex);
+
+    /** @return A decoded time, in seconds into the lead-in and signal, as seconds into the signal. */
+    double _toSignalTime(double inDecodedTime) const;
+
+    /**
+     * @return Decoded notes in signal time, gated, clamped to the start of the
+     *         signal, and sorted.
+     */
+    std::vector<Note> _release(const std::vector<Note>& inNotes) const;
+
+    /**
+     * @return `finalized_through` after the chunk ending at `inDecodedTime`:
+     *         that, in signal time, or less if the gate may still cut a note
+     *         not reported yet.
+     */
+    double _finalizedThrough(double inDecodedTime, int inChunk) const;
 
     /**
      * Rebuild the decode state `inResumePoint` describes, after `_configure`.
@@ -131,10 +209,15 @@ private:
     NoteAssembler mAssembler;
     std::vector<float> mChunk;
     std::vector<InstrumentGroup> mInstruments;
+
+    CorrectionSettings mCorrections;
+    SilenceGate mGate;
 };
 
 void Transcriber::Impl::_configure(const TranscribeOptions& inOptions)
 {
+    validateCorrections(inOptions);
+
     mInstruments = uniqueInstruments(inOptions.instruments);
 
     for (const InstrumentGroup group: mInstruments) {
@@ -144,6 +227,7 @@ void Transcriber::Impl::_configure(const TranscribeOptions& inOptions)
         }
     }
 
+    mCorrections = correctionSettings(inOptions);
     mModel.setNumThreads(inOptions.n_threads);
     mModel.setInstrumentRows(InstrumentGroups::conditioningRows(mInstruments));
 
@@ -169,9 +253,9 @@ int Transcriber::Impl::_restore(std::string_view inResumePoint,
     }
 
     if (state->n_samples != inNSamples || state->prelude_forcing != inOptions.prelude_forcing
-        || state->instruments != mInstruments || state->decoded > inNChunks) {
+        || state->instruments != mInstruments || state->corrections != mCorrections || state->decoded > inNChunks) {
         throw Exception(Error::InvalidResumePoint,
-                        "resume point made for another signal, selection or prelude setting");
+                        "resume point made for another signal, selection, prelude, lead-in or silence gate setting");
     }
 
     const int last = state->decoded - 1;
@@ -209,6 +293,7 @@ std::string
     state.n_samples = inNSamples;
     state.prelude_forcing = inOptions.prelude_forcing;
     state.instruments = mInstruments;
+    state.corrections = mCorrections;
     state.decoded = inDecoded;
     state.in_prologue = mTracker.inPrologue();
     state.open = mTracker.openNotes();
@@ -226,9 +311,75 @@ void Transcriber::Impl::_fillChunk(std::span<const float> inSamples, int inIndex
 {
     mChunk.assign(static_cast<std::size_t>(SEGMENT_SAMPLES), 0.0f);
 
-    const std::size_t start = static_cast<std::size_t>(inIndex) * SEGMENT_SAMPLES;
-    const std::size_t available = std::min<std::size_t>(SEGMENT_SAMPLES, inSamples.size() - start);
-    std::copy_n(inSamples.begin() + static_cast<std::ptrdiff_t>(start), available, mChunk.begin());
+    // Positions in the lead-in followed by the signal.
+    const std::size_t lead_in = static_cast<std::size_t>(mCorrections.lead_in_frames) * FRAME_SAMPLES;
+    const std::size_t chunk_start = static_cast<std::size_t>(inIndex) * SEGMENT_SAMPLES;
+    const std::size_t chunk_end = chunk_start + SEGMENT_SAMPLES;
+    const std::size_t from = std::max(chunk_start, lead_in);
+    const std::size_t to = std::min(chunk_end, lead_in + inSamples.size());
+
+    if (from < to) {
+        std::copy(inSamples.begin() + static_cast<std::ptrdiff_t>(from - lead_in),
+                  inSamples.begin() + static_cast<std::ptrdiff_t>(to - lead_in),
+                  mChunk.begin() + static_cast<std::ptrdiff_t>(from - chunk_start));
+    }
+}
+
+double Transcriber::Impl::_toSignalTime(double inDecodedTime) const
+{
+    const double frames = inDecodedTime * Vocabulary::FRAME_RATE;
+    const double whole = std::round(frames);
+
+    // On the frame grid, computed the way decoding computes its times, so a
+    // shifted onset is the same double a decoded one would be.
+    if (std::abs(frames - whole) < 1e-6) {
+        return (whole - mCorrections.lead_in_frames) / Vocabulary::FRAME_RATE;
+    }
+
+    return inDecodedTime - static_cast<double>(mCorrections.lead_in_frames) / Vocabulary::FRAME_RATE;
+}
+
+std::vector<Note> Transcriber::Impl::_release(const std::vector<Note>& inNotes) const
+{
+    std::vector<Note> released;
+
+    for (Note note: inNotes) {
+        note.onset = _toSignalTime(note.onset);
+        note.offset = _toSignalTime(note.offset);
+
+        std::optional<Note> gated = mGate.apply(note);
+
+        if (!gated || gated->onset < -ONSET_LEAD) {
+            continue;
+        }
+
+        if (gated->onset < 0.0) {
+            gated->onset = 0.0;
+            gated->offset = std::max(gated->offset, MINIMUM_NOTE_DURATION_SECONDS);
+        }
+
+        released.push_back(*gated);
+    }
+
+    sortNotes(released);
+    return released;
+}
+
+double Transcriber::Impl::_finalizedThrough(double inDecodedTime, int inChunk) const
+{
+    double horizon = _toSignalTime(inDecodedTime);
+
+    for (const OpenNoteTracker::OpenNote& open: mTracker.openNotes()) {
+        horizon = std::min(horizon, mGate.cutPoint(_toSignalTime(open.onset)));
+    }
+
+    for (const TrackedNote& tracked: mAssembler.closedNotes()) {
+        if (tracked.chunk_index == inChunk) {
+            horizon = std::min(horizon, mGate.cutPoint(_toSignalTime(tracked.note.onset)));
+        }
+    }
+
+    return std::max(horizon, 0.0);
 }
 
 std::expected<std::vector<Note>, Error> Transcriber::Impl::transcribe(std::span<const float> inSamples,
@@ -242,7 +393,9 @@ std::expected<std::vector<Note>, Error> Transcriber::Impl::transcribe(std::span<
 
     _configure(inOptions);
 
-    const int n_chunks = Transcriber::chunkCount(inSamples.size());
+    mGate = inOptions.silence_gate.enabled ? SilenceGate(inSamples, inOptions.silence_gate) : SilenceGate();
+
+    const int n_chunks = Transcriber::chunkCount(inSamples.size(), inOptions.lead_in);
     int first_chunk = 0;
 
     if (!inOptions.resume_from.empty()) {
@@ -256,14 +409,6 @@ std::expected<std::vector<Note>, Error> Transcriber::Impl::transcribe(std::span<
             return std::unexpected(Error::Cancelled);
         }
 
-        _fillChunk(inSamples, chunk);
-
-        // The tail is zero-padded and the padding is *not* masked away: the
-        // conditioner is handed a full segment, so the model sees the trailing
-        // silence as audio. That is what the reference does, and "improving" it
-        // would change every note near the end of a signal.
-        const std::vector<float> conditioning = mModel.encodeAudio(mChunk);
-
         ChunkBoundary boundary;
         boundary.seek_time = chunk * SEGMENT_DURATION;
 
@@ -276,51 +421,26 @@ std::expected<std::vector<Note>, Error> Transcriber::Impl::transcribe(std::span<
         // decoder's own view.
         mAssembler.apply(mTracker.feed(boundary), chunk);
 
-        std::vector<std::int32_t> prompt;
+        const double chunk_start = _toSignalTime(boundary.seek_time);
 
-        if (chunk > 0 && inOptions.prelude_forcing) {
-            prompt = Vocabulary::tieSectionTokenIds(mTracker.openKeys());
-        }
-
-        // Clamped rather than allowed to overflow. A pathological prologue eats
-        // into the generation budget, which is the right trade: the reference
-        // treats running out without an EOS as a warning, not a failure.
-        const int prefix = mMelFrames + 1 + static_cast<int>(mModel.instrumentRows().size());
-        const int budget = mModel.contextSize() - prefix - 1;
-
-        if (budget <= static_cast<int>(prompt.size())) {
-            throw Exception(
-                Error::ContextOverflow,
-                msl::format("chunk {}: a {}-token prompt leaves no room after a {}-row prefix in a {}-position context",
-                            chunk,
-                            prompt.size(),
-                            prefix,
-                            mModel.contextSize()));
-        }
-
-        const int max_tokens = std::min(Transcriber::MAX_TOKENS_PER_CHUNK, budget);
-
-        const std::vector<std::int32_t> tokens =
-            mModel.generate(conditioning, mMelFrames, max_tokens, Vocabulary::EOS_ID, prompt);
-
-        for (const std::int32_t token: tokens) {
-            if (token == Vocabulary::EOS_ID) {
-                break;
-            }
-
-            mAssembler.apply(mTracker.feed(token), chunk);
+        if (mGate.covers(chunk_start, chunk_start + SEGMENT_DURATION)) {
+            // Decoded as an empty tie section, which closes every open note,
+            // instead of letting the model carry them on through the silence.
+            mAssembler.apply(mTracker.feed(Vocabulary::TIE_FIRST), chunk);
+        } else {
+            _decodeChunk(inSamples, inOptions, chunk);
         }
 
         if (inCallback) {
             // One chunk late: a note is only final once the following chunk has
             // decoded, so releasing it now would mean correcting it later.
-            const std::vector<Note> ready = chunk > 0 ? mAssembler.closedIn(chunk - 1) : std::vector<Note> {};
+            const std::vector<Note> ready = chunk > 0 ? _release(mAssembler.closedIn(chunk - 1)) : std::vector<Note> {};
 
             TranscriptionUpdate update;
             update.new_notes = ready;
             // Chunks 0 through chunk-1 have been released, and each of them
             // closed only notes ending inside its own window.
-            update.finalized_through = chunk * SEGMENT_DURATION;
+            update.finalized_through = _finalizedThrough(chunk * SEGMENT_DURATION, chunk);
             update.progress = static_cast<float>(chunk + 1) / static_cast<float>(n_chunks);
             update.resume_point = _resumePoint(inSamples.size(), inOptions, chunk + 1);
 
@@ -337,14 +457,14 @@ std::expected<std::vector<Note>, Error> Transcriber::Impl::transcribe(std::span<
             // The withheld tail. Notes finish() closes were open throughout, so
             // nothing can have opened on their channel to trim an earlier chunk's --
             // this call cannot invalidate anything already reported.
-            const std::vector<Note> tail = mAssembler.closedIn(n_chunks - 1);
+            const std::vector<Note> tail = _release(mAssembler.closedIn(n_chunks - 1));
 
             TranscriptionUpdate update;
             update.new_notes = tail;
             // An under-claim: the last chunk has no window past it, so a note
             // there may end fractionally later. Claiming less than is known
             // costs a host nothing; claiming more would cost it a note.
-            update.finalized_through = n_chunks * SEGMENT_DURATION;
+            update.finalized_through = std::max(_toSignalTime(n_chunks * SEGMENT_DURATION), 0.0);
             update.progress = 1.0f;
 
             if (!inCallback(update)) {
@@ -353,7 +473,52 @@ std::expected<std::vector<Note>, Error> Transcriber::Impl::transcribe(std::span<
         }
     }
 
-    return mAssembler.finalize();
+    return _release(mAssembler.finalize());
+}
+
+void Transcriber::Impl::_decodeChunk(std::span<const float> inSamples, const TranscribeOptions& inOptions, int inChunk)
+{
+    _fillChunk(inSamples, inChunk);
+
+    // The tail is zero-padded and the padding is *not* masked away: the
+    // conditioner is handed a full segment, so the model sees the trailing
+    // silence as audio. That is what the reference does.
+    const std::vector<float> conditioning = mModel.encodeAudio(mChunk);
+
+    std::vector<std::int32_t> prompt;
+
+    if (inChunk > 0 && inOptions.prelude_forcing) {
+        prompt = Vocabulary::tieSectionTokenIds(mTracker.openKeys());
+    }
+
+    // Clamped rather than allowed to overflow. A pathological prologue eats
+    // into the generation budget, which is the right trade: the reference
+    // treats running out without an EOS as a warning, not a failure.
+    const int prefix = mMelFrames + 1 + static_cast<int>(mModel.instrumentRows().size());
+    const int budget = mModel.contextSize() - prefix - 1;
+
+    if (budget <= static_cast<int>(prompt.size())) {
+        throw Exception(
+            Error::ContextOverflow,
+            msl::format("chunk {}: a {}-token prompt leaves no room after a {}-row prefix in a {}-position context",
+                        inChunk,
+                        prompt.size(),
+                        prefix,
+                        mModel.contextSize()));
+    }
+
+    const int max_tokens = std::min(Transcriber::MAX_TOKENS_PER_CHUNK, budget);
+
+    const std::vector<std::int32_t> tokens =
+        mModel.generate(conditioning, mMelFrames, max_tokens, Vocabulary::EOS_ID, prompt);
+
+    for (const std::int32_t token: tokens) {
+        if (token == Vocabulary::EOS_ID) {
+            break;
+        }
+
+        mAssembler.apply(mTracker.feed(token), inChunk);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -400,9 +565,14 @@ Transcriber::~Transcriber() = default;
 Transcriber::Transcriber(Transcriber&&) noexcept = default;
 Transcriber& Transcriber::operator=(Transcriber&&) noexcept = default;
 
-int Transcriber::chunkCount(std::size_t inNSamples)
+int Transcriber::chunkCount(std::size_t inNSamples, const LeadInOptions& inLeadIn)
 {
-    return static_cast<int>((inNSamples + SEGMENT_SAMPLES - 1) / SEGMENT_SAMPLES);
+    if (inNSamples == 0) {
+        return 0;
+    }
+
+    const std::size_t padded = inNSamples + static_cast<std::size_t>(leadInFrames(inLeadIn)) * FRAME_SAMPLES;
+    return static_cast<int>((padded + SEGMENT_SAMPLES - 1) / SEGMENT_SAMPLES);
 }
 
 std::expected<Transcriber, Error> Transcriber::load(const std::filesystem::path& inGgufPath, LoadOptions inOptions)

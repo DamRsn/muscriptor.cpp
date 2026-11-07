@@ -24,6 +24,37 @@ namespace msl
  */
 using CancelPredicate = std::function<bool()>;
 
+/**
+ * Silence decoded ahead of the signal and removed from the result. The model
+ * reads sound in the first frames of a chunk as already sounding, so without
+ * it notes that start the signal are lost. See docs/API.md.
+ */
+struct LeadInOptions {
+    bool enabled = true;
+
+    // Seconds, 0 to SEGMENT_DURATION; rounded to the 10 ms frame grid.
+    double duration = 0.2;
+};
+
+/**
+ * Drops what the model produces where the input is silent, and skips decoding
+ * chunks that are silent throughout. See docs/API.md.
+ */
+struct SilenceGateOptions {
+    bool enabled = true;
+
+    // A 10 ms frame whose RMS is below this, in dB relative to full scale, is silent.
+    float threshold_dbfs = -60.0f;
+
+    // Seconds. A quieter run shorter than this is not silence; one touching
+    // either end of the signal always is.
+    double min_duration = 0.3;
+
+    // Seconds after the input goes silent during which a note may still ring
+    // and start.
+    double release = 0.1;
+};
+
 struct TranscribeOptions {
     /**
      * Instruments to transcribe. Empty selects the unconditional path.
@@ -39,6 +70,11 @@ struct TranscribeOptions {
      * reference does by default. Chunks are decoded strictly in order.
      */
     bool prelude_forcing = true;
+
+    /** Turn off, with `silence_gate`, for the reference's exact output. */
+    LeadInOptions lead_in;
+
+    SilenceGateOptions silence_gate;
 
     /**
      * CPU threads; 0 selects the performance-core count. Ignored on a GPU
@@ -108,8 +144,9 @@ struct TranscriptionUpdate {
 
     /**
      * Seconds. Every note whose offset is below this has been reported; nothing
-     * is known about the signal beyond it. After chunk *k* this is
-     * `k * SEGMENT_DURATION`.
+     * is known about the signal beyond it. After chunk *k* this is at most
+     * `k * SEGMENT_DURATION` minus the lead-in, and less while the silence gate
+     * may still cut a note that has not been reported.
      *
      * Exception: a note the model never closes is closed at `onset + 10 ms`
      * when the signal ends, possibly far behind this line, and arrives in the
@@ -197,8 +234,9 @@ public:
      * One call at a time per instance: it mutates the KV cache and is not
      * synchronised.
      *
-     * @param inSamples 16 kHz mono float32, the entire signal. Split into 5 s
-     *        chunks; a short tail is zero-padded. An empty signal yields no notes.
+     * @param inSamples 16 kHz mono float32, the entire signal. Split, after the
+     *        lead-in, into 5 s chunks; a short tail is zero-padded. An empty
+     *        signal yields no notes.
      * @param inOptions Decode-time configuration.
      * @param inCallback Optional per-chunk progress and cancellation.
      * @return Every note, sorted by (onset, is_drum, program, pitch, offset).
@@ -207,8 +245,8 @@ public:
                                                        const TranscribeOptions& inOptions = {},
                                                        const NoteCallback& inCallback = {});
 
-    /** @return Number of 5 s chunks `inNSamples` will be split into. */
-    static int chunkCount(std::size_t inNSamples);
+    /** @return Number of 5 s chunks `inNSamples` will be split into, with `inLeadIn` ahead of them. */
+    static int chunkCount(std::size_t inNSamples, const LeadInOptions& inLeadIn = {});
 
 private:
     Transcriber();

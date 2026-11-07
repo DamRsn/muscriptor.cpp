@@ -109,9 +109,11 @@ std::expected<std::vector<msl::Note>, msl::Error> notes =
     t->transcribe(samples, options, callback);
 ```
 
-- `samples` is the whole signal, 16 kHz mono float32. It is split into 5 s
-  chunks (`Transcriber::SEGMENT_SAMPLES`), and the last chunk is zero-padded.
-  An empty signal returns no notes.
+- `samples` is the whole signal, 16 kHz mono float32. A lead-in of silence is
+  put ahead of it, the result is split into 5 s chunks
+  (`Transcriber::SEGMENT_SAMPLES`), and the last chunk is zero-padded
+  ([Lead-in and silence gate](#lead-in-and-silence-gate)). An empty signal
+  returns no notes.
 - The call blocks for seconds to minutes. Never call it from an audio thread.
 - One call at a time per instance: it mutates the KV cache and is not
   synchronised. For concurrent transcription, use one `Transcriber` per thread.
@@ -127,8 +129,46 @@ std::expected<std::vector<msl::Note>, msl::Error> notes =
 |---|---|---|
 | `instruments` | empty (all) | Restricts transcription to these groups. It adds a conditioning prefix and masks every other instrument's tokens, so no other instrument can appear. Set it before transcribing; it cannot be applied to a finished result. |
 | `prelude_forcing` | `true` | Feeds each chunk's still-sounding notes into the next chunk as a forced prompt ([`TOKENIZER.md`](TOKENIZER.md) § 4). |
+| `lead_in` | on, 0.2 s | Silence decoded ahead of the signal ([Lead-in and silence gate](#lead-in-and-silence-gate)). |
+| `silence_gate` | on, −60 dBFS, 0.3 s, 0.1 s release | Drops notes where the input is silent and skips silent chunks ([Lead-in and silence gate](#lead-in-and-silence-gate)). |
 | `resume_from` | empty | Continues an earlier call from one of its `resume_point`s instead of starting over ([Resuming](#resuming)). |
 | `n_threads` | `0` | CPU threads. `0` selects the number of performance cores on macOS, and of logical CPUs elsewhere. On a GPU backend, only the conditioning front-end runs on the CPU and uses them. |
+
+### Lead-in and silence gate
+
+Two corrections on top of the reference's decoding, both on by default. With
+both off, the output is the reference's.
+
+**Lead-in** (`LeadInOptions`). The model reads sound in the first frames of a
+chunk as already sounding: pitched notes go into the chunk's tie prologue,
+where the first chunk has nothing to continue, and drum hits are not emitted.
+Notes that start the signal are lost. The lead-in puts `duration` seconds of
+silence, rounded to the 10 ms grid, ahead of the signal, and removes it from
+every time reported. As a result:
+
+- Chunk boundaries fall at `5k − duration` seconds into the signal, and
+  `chunkCount` takes the lead-in into account.
+- An onset the model places up to 50 ms before the signal starts is reported
+  at 0. A note starting earlier than that is dropped.
+- `duration` must lie between 0 and `SEGMENT_DURATION`. Otherwise the call
+  returns `Error::InvalidArgument`.
+
+**Silence gate** (`SilenceGateOptions`). Where the input goes silent, the model
+can keep repeating the last notes it heard, and prelude forcing carries them
+into the following chunks. The gate measures the input's RMS over 10 ms
+frames. A run of frames below `threshold_dbfs`, at least `min_duration` long,
+is a silent region; a run touching either end of the signal always is, and
+everything before and after the signal counts as silent. Then:
+
+- A chunk that lies entirely within a silent region, counted from `release`
+  after the region starts, is not run through the model. It decodes as an
+  empty tie section, so every note still open closes at its start.
+- A note that starts in a silent region, from `release` after its start up to
+  50 ms before its end, is dropped.
+- A note that runs past `release` into a silent region is cut there.
+
+The threshold must be finite, and the durations finite and non-negative.
+Otherwise the call returns `Error::InvalidArgument`.
 
 ## Notes
 
@@ -143,7 +183,7 @@ struct Note {
 ```
 
 - Onsets are on the model's 10 ms grid. Offsets can fall between grid points
-  after overlap trimming.
+  after overlap trimming or the silence gate.
 - Drum-token hits last 10 ms: their `offset` is `onset + 10 ms`. A decoded
   program 96 is reported as a drum and keeps its decoded offset.
 - There is no velocity: the model does not predict one
@@ -185,10 +225,12 @@ struct TranscriptionUpdate {
   chunk *k* carries the notes that closed during chunk *k−1*. A note is
   reported exactly once and never changes afterwards. Joining every call's
   `new_notes` gives the same list `transcribe` returns.
-- **`finalized_through`**, in seconds. After chunk *k* it is `k × 5 s`. Every
-  note ending before it has been reported, and nothing is known yet about later
-  audio. A host playing a transcription while it is still running can play up
-  to this point.
+- **`finalized_through`**, in seconds. After chunk *k* it is `k × 5 s` minus
+  the lead-in, and never below 0. While the silence gate may still cut a note
+  that has not been reported, it stops at the earliest point that note could
+  end. Every note ending before it has been reported, and nothing is known yet
+  about later audio. A host playing a transcription while it is still running
+  can play up to this point.
 
   One exception: a note the model never closes is closed at `onset + 10 ms`
   when the signal ends. It can end well before the current line, and only
@@ -212,8 +254,8 @@ call `transcribe` again with the same signal and options and
   plus the ones reported before are every `new_notes` of an uninterrupted run
   joined, which is that run's result.
 - A point that is malformed, or that was made for another signal length,
-  instrument selection or `prelude_forcing`, returns
-  `Error::InvalidResumePoint` before anything is decoded.
+  instrument selection, `prelude_forcing`, `lead_in` or `silence_gate`,
+  returns `Error::InvalidResumePoint` before anything is decoded.
 - The point does not record the checkpoint or the device. Resuming with another
   checkpoint mixes two models' output. Resuming on another backend works, and
   differs the way CPU and GPU results always do.

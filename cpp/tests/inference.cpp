@@ -259,6 +259,9 @@ const Transcription& transcription(const std::string& inVariant)
     auto out = std::make_unique<Transcription>();
     out->options.prelude_forcing = variant.prelude_forcing;
     out->options.instruments = groupsFor(variant);
+    // The reference has neither correction, so parity needs both off.
+    out->options.lead_in.enabled = false;
+    out->options.silence_gate.enabled = false;
 
     out->notes =
         sharedTranscriber().transcribe(fixtureSignal(), out->options, [&](const TranscriptionUpdate& inUpdate) {

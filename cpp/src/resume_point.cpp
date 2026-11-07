@@ -18,9 +18,10 @@ namespace
 {
 
     constexpr std::string_view MAGIC = "muscriptor-resume";
-    constexpr long long FORMAT_VERSION = 1;
+    constexpr long long FORMAT_VERSION = 2;
 
     constexpr long long MAX_VALUE = std::numeric_limits<int>::max();
+    constexpr long long MAX_SETTING = std::numeric_limits<long long>::max();
     constexpr long long MAX_PITCH = Vocabulary::PITCH_COUNT - 1;
     constexpr long long MAX_PROGRAM = Vocabulary::PROGRAM_COUNT - 1;
 
@@ -114,7 +115,11 @@ std::string serializeResumeState(const ResumeState& inState)
         out << ' ' << static_cast<int>(group);
     }
 
-    out << "\ndecoded " << inState.decoded << '\n';
+    const CorrectionSettings& corrections = inState.corrections;
+    out << "\nleadin " << corrections.lead_in_frames << '\n';
+    out << "gate " << (corrections.silence_gate ? 1 : 0) << ' ' << corrections.gate_threshold << ' '
+        << corrections.gate_min_duration << ' ' << corrections.gate_release << '\n';
+    out << "decoded " << inState.decoded << '\n';
     out << "prologue " << (inState.in_prologue ? 1 : 0) << '\n';
     out << "open " << inState.open.size() << '\n';
 
@@ -157,6 +162,15 @@ std::optional<ResumeState> parseResumeState(std::string_view inText)
     for (long long i = 0; i < n_instruments && !in.failed(); ++i) {
         state.instruments.push_back(static_cast<InstrumentGroup>(in.number(0, MAX_VALUE)));
     }
+
+    in.expect("leadin");
+    state.corrections.lead_in_frames = static_cast<int>(in.number(0, MAX_VALUE));
+
+    in.expect("gate");
+    state.corrections.silence_gate = in.number(0, 1) == 1;
+    state.corrections.gate_threshold = in.number(std::numeric_limits<long long>::min(), MAX_SETTING);
+    state.corrections.gate_min_duration = in.number(0, MAX_SETTING);
+    state.corrections.gate_release = in.number(0, MAX_SETTING);
 
     in.expect("decoded");
     state.decoded = static_cast<int>(in.number(1, MAX_VALUE));
